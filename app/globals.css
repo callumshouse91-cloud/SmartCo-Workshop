@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  color: #0a1628;
+  background: #ffffff;
+}
+
+.enter-up { animation: up .55s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes up { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+.card-pop { animation: pop .4s cubic-bezier(.2,.9,.3,1.2) both; }
+@keyframes pop { from { opacity: 0; transform: scale(.82); } to { opacity: 1; transform: scale(1); } }
+.link-path { stroke-dasharray: 600; stroke-dashoffset: 600; animation: draw .7s ease forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #0065fc; outline-offset: 2px; }
+button:disabled { opacity: .55; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+@media print {
+  body * { visibility: hidden; }
+  #print-area, #print-area * { visibility: visible; }
+  #print-area { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none; max-height: none; }
+  .no-print { display: none !important; }
+}
