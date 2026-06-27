@@ -22,22 +22,17 @@ button:disabled { opacity: .55; cursor: default; }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-.board-card .card-controls,
-.board-card .resize-handle,
-.board-card .card-dup,
-.board-card .connect-handle { opacity: 0; pointer-events: none; transition: opacity .15s; }
-.board-card:hover .card-controls,
-.board-card:hover .resize-handle,
+.board-card .card-dup { opacity: 0; pointer-events: none; transition: opacity .15s; }
 .board-card:hover .card-dup,
-.board-card:hover .connect-handle,
-.board-card.card-selected .card-controls,
-.board-card.card-selected .resize-handle,
-.board-card.card-selected .card-dup,
-.board-card.card-selected .connect-handle { opacity: 1; pointer-events: auto; }
-.board-card.card-editing .card-controls,
-.board-card.card-editing .resize-handle,
-.board-card.card-editing .card-dup,
-.board-card.card-editing .connect-handle { opacity: 1; pointer-events: auto; }
+.board-card.card-selected .card-dup { opacity: 1; pointer-events: auto; }
+
+.board-card .handle-mark { opacity: 0.45; transition: opacity .15s; }
+.board-card:hover .handle-mark,
+.board-card.card-selected .handle-mark { opacity: 1; }
+
+.board-panel-transition {
+  transition: transform 0.35s cubic-bezier(.2,.8,.2,1), max-height 0.35s cubic-bezier(.2,.8,.2,1), width 0.35s cubic-bezier(.2,.8,.2,1), min-width 0.35s cubic-bezier(.2,.8,.2,1);
+}
 
 @media print {
   body * { visibility: hidden; }
