@@ -54,18 +54,29 @@ export function Corner() {
   );
 }
 
-export async function callAI(system: string, content: string): Promise<string> {
+export type AIProvider = "claude" | "gemini" | "gpt";
+
+export async function callAIResult(
+  system: string,
+  content: string,
+  provider: AIProvider = "claude"
+): Promise<{ text: string; error?: string }> {
   try {
     const res = await fetch("/api/ai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ system, content }),
+      body: JSON.stringify({ system, content, provider }),
     });
     const data = await res.json();
-    return (data.text || "").trim();
-  } catch {
-    return "";
+    return { text: (data.text || "").trim(), error: data.error };
+  } catch (e) {
+    return { text: "", error: String(e) };
   }
+}
+
+export async function callAI(system: string, content: string, provider: AIProvider = "claude"): Promise<string> {
+  const { text } = await callAIResult(system, content, provider);
+  return text;
 }
 export function parseJSON(text: string) {
   try { return JSON.parse(text.replace(/```json|```/g, "").trim()); } catch { return null; }

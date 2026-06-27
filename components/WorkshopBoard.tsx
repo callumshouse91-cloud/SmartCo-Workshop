@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { C, THEMES, themeOf, SmartCoLogo, MUFGLogo, Corner, callAI, parseJSON } from "./brand";
+import { C, THEMES, themeOf, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider } from "./brand";
 import { DECK } from "./deck";
 
 const CARD_W = 216;
@@ -40,6 +40,15 @@ const PALETTE = [
   { color: C.navy, label: "navy" },
   { color: C.white, label: "white" },
 ];
+
+const AI_PROVIDERS: { id: AIProvider; label: string }[] = [
+  { id: "claude", label: "Claude" },
+  { id: "gemini", label: "Gemini" },
+  { id: "gpt", label: "GPT" },
+];
+
+const findCardAtWorld = (cards: any[], wx: number, wy: number) =>
+  cards.find((c) => wx >= c.x && wx <= c.x + cardW(c) && wy >= c.y && wy <= c.y + cardH(c));
 
 export default function WorkshopBoard() {
   const [mode, setMode] = useState<"intro" | "board">("intro");
@@ -106,10 +115,16 @@ function Board({ onBack }: { onBack: () => void }) {
   const [insight, setInsight] = useState("");
   const [text, setText] = useState("");
   const [theme, setTheme] = useState("accelerate");
-  const [busy, setBusy] = useState({ review: false, links: false, ideas: false });
+  const [provider, setProvider] = useState<AIProvider>("claude");
+  const [busy, setBusy] = useState({ review: false, links: false, ideas: false, compare: false });
   const [showPack, setShowPack] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
+  const [compareResults, setCompareResults] = useState<Record<AIProvider, { text: string; error?: string; loading?: boolean }> | null>(null);
   const [drag, setDrag] = useState<any>(null);
   const [resize, setResize] = useState<{ id: string; startWx: number; startWy: number; startW: number; startH: number } | null>(null);
+  const [connecting, setConnecting] = useState<{ fromId: string } | null>(null);
+  const [connectCursor, setConnectCursor] = useState<{ x: number; y: number } | null>(null);
+  const [selectedLinkIdx, setSelectedLinkIdx] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panDrag, setPanDrag] = useState<{ sx: number; sy: number; spx: number; spy: number } | null>(null);
@@ -175,6 +190,19 @@ function Board({ onBack }: { onBack: () => void }) {
     }
   }, [editingId]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (editingId) return;
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedLinkIdx !== null) {
+        e.preventDefault();
+        setLinks((l) => l.filter((_, i) => i !== selectedLinkIdx));
+        setSelectedLinkIdx(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedLinkIdx, editingId]);
+
   const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
     setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   }, []);
@@ -233,6 +261,11 @@ function Board({ onBack }: { onBack: () => void }) {
     setSelectedId(copy.id);
   };
 
+  const removeLink = (idx: number) => {
+    setLinks((l) => l.filter((_, i) => i !== idx));
+    setSelectedLinkIdx(null);
+  };
+
   const toWorld = useCallback((clientX: number, clientY: number) => {
     const rect = canvasRef.current!.getBoundingClientRect();
     const { zoom: z, panX, panY } = zoomPanRef.current;
@@ -267,10 +300,11 @@ function Board({ onBack }: { onBack: () => void }) {
   }, [zoomAtPoint]);
 
   const onCanvasDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || editingId) return;
+    if (e.button !== 0 || editingId || connecting) return;
     const t = e.target as HTMLElement;
-    if (t.closest("[data-board-ui]") || t.closest("[data-card]")) return;
+    if (t.closest("[data-board-ui]") || t.closest("[data-card]") || t.closest("[data-link-ui]")) return;
     setSelectedId(null);
+    setSelectedLinkIdx(null);
     setPanDrag({ sx: e.clientX, sy: e.clientY, spx: zoomPanRef.current.panX, spy: zoomPanRef.current.panY });
     canvasRef.current?.setPointerCapture(e.pointerId);
   };
@@ -305,7 +339,20 @@ function Board({ onBack }: { onBack: () => void }) {
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
+  const onConnectDown = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    setConnecting({ fromId: id });
+    setConnectCursor(toWorld(e.clientX, e.clientY));
+    setSelectedLinkIdx(null);
+    setSelectedId(id);
+    canvasRef.current?.setPointerCapture(e.pointerId);
+  };
+
   const onMove = (e: React.PointerEvent) => {
+    if (connecting) {
+      setConnectCursor(toWorld(e.clientX, e.clientY));
+      return;
+    }
     if (panDrag) {
       setPan({ x: panDrag.spx + e.clientX - panDrag.sx, y: panDrag.spy + e.clientY - panDrag.sy });
       return;
@@ -324,7 +371,27 @@ function Board({ onBack }: { onBack: () => void }) {
     setCards((c) => c.map((x0) => (x0.id === drag.id ? { ...x0, x, y } : x0)));
   };
 
-  const onUp = () => { setDrag(null); setPanDrag(null); setResize(null); };
+  const onUp = (e?: React.PointerEvent) => {
+    if (connecting && e) {
+      const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+      const target = findCardAtWorld(cards, wx, wy);
+      if (target && target.id !== connecting.fromId) {
+        setLinks((l) => {
+          const dup = l.some((link) =>
+            (link.a === connecting.fromId && link.b === target.id) ||
+            (link.a === target.id && link.b === connecting.fromId)
+          );
+          if (dup) return l;
+          return [...l, { a: connecting.fromId, b: target.id, manual: true }];
+        });
+      }
+      setConnecting(null);
+      setConnectCursor(null);
+    }
+    setDrag(null);
+    setPanDrag(null);
+    setResize(null);
+  };
 
   const zoomStep = (delta: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -343,14 +410,38 @@ function Board({ onBack }: { onBack: () => void }) {
     }));
   };
 
+  const reviewPrompt = () => {
+    const sys = "You are a senior delivery/PMO consultant observing a live MUFG discovery workshop. Given captured pain points across three themes, return 3 sharp insights as plain-text lines, each starting with '— '. Cover: the strongest emerging pattern, the single biggest AI opportunity, and one gap worth probing. No preamble, no headings.";
+    const body = cards.map((c) => `[${themeOf(c.theme).label}] ${c.text}`).join("\n");
+    return { sys, body };
+  };
+
   async function runReview() {
     if (busy.review || !cards.length) return;
     setBusy((b) => ({ ...b, review: true }));
-    const sys = "You are a senior delivery/PMO consultant observing a live MUFG discovery workshop. Given captured pain points across three themes, return 3 sharp insights as plain-text lines, each starting with '— '. Cover: the strongest emerging pattern, the single biggest AI opportunity, and one gap worth probing. No preamble, no headings.";
-    const body = cards.map((c) => `[${themeOf(c.theme).label}] ${c.text}`).join("\n");
-    const out = await callAI(sys, body);
+    const { sys, body } = reviewPrompt();
+    const out = await callAI(sys, body, provider);
     setInsight(out || "— AI review unavailable right now. Capture and save are still working normally.");
     setBusy((b) => ({ ...b, review: false }));
+  }
+
+  async function compareModels() {
+    if (busy.compare || !cards.length) return;
+    setShowCompare(true);
+    setBusy((b) => ({ ...b, compare: true }));
+    const loading = { text: "", loading: true };
+    setCompareResults({ claude: { ...loading }, gemini: { ...loading }, gpt: { ...loading } });
+    const { sys, body } = reviewPrompt();
+    const results = await Promise.all(
+      AI_PROVIDERS.map(async ({ id }) => {
+        const { text, error } = await callAIResult(sys, body, id);
+        return { id, text: text || (error ? `— ${error}` : "— No response"), error };
+      })
+    );
+    const mapped = {} as Record<AIProvider, { text: string; error?: string; loading?: boolean }>;
+    results.forEach((r) => { mapped[r.id] = { text: r.text, error: r.error, loading: false }; });
+    setCompareResults(mapped);
+    setBusy((b) => ({ ...b, compare: false }));
   }
 
   async function mapLinks() {
@@ -358,11 +449,12 @@ function Board({ onBack }: { onBack: () => void }) {
     setBusy((b) => ({ ...b, links: true }));
     const sys = 'Return ONLY a JSON array, no prose. Identify pairs of related captured items. Each element: {"a": id, "b": id, "reason": "<=6 words"}. Use only the provided ids. Max 6 pairs.';
     const list = cards.map((c) => ({ id: c.id, text: c.text, theme: c.theme }));
-    const out = await callAI(sys, JSON.stringify(list));
+    const out = await callAI(sys, JSON.stringify(list), provider);
     const arr = parseJSON(out);
     if (Array.isArray(arr)) {
       const ids = new Set(cards.map((c) => c.id));
-      setLinks(arr.filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b));
+      const aiLinks = arr.filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b);
+      setLinks((l) => [...l.filter((x) => x.manual), ...aiLinks]);
     }
     setBusy((b) => ({ ...b, links: false }));
   }
@@ -372,7 +464,7 @@ function Board({ onBack }: { onBack: () => void }) {
     setBusy((b) => ({ ...b, ideas: true }));
     const sys = 'Return ONLY a JSON array of 3 objects, no prose. Each: {"theme": "accelerate"|"manual"|"quality", "text": "<concise AI/delivery use-case idea, <=12 words>"}. Base them on the captured pains.';
     const body = cards.map((c) => `[${c.theme}] ${c.text}`).join("\n");
-    const out = await callAI(sys, body || "No cards yet — suggest generic delivery AI use cases.");
+    const out = await callAI(sys, body || "No cards yet — suggest generic delivery AI use cases.", provider);
     const arr = parseJSON(out);
     if (Array.isArray(arr)) arr.slice(0, 3).forEach((it: any, k: number) => {
       const th = THEMES.some((t) => t.id === it.theme) ? it.theme : "accelerate";
@@ -392,8 +484,12 @@ function Board({ onBack }: { onBack: () => void }) {
           <span style={{ color: C.border }}>×</span>
           <MUFGLogo scale={0.85} />
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={provider} onChange={(e) => setProvider(e.target.value as AIProvider)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 10px", fontSize: 13, color: C.navy, background: C.white, fontWeight: 600 }}>
+            {AI_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
           <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
+          <button style={btn.ai(C.yellow)} onClick={compareModels} disabled={busy.compare || !cards.length}>{busy.compare ? "Comparing…" : "Compare models"}</button>
           <button style={btn.ai(C.blue)} onClick={mapLinks} disabled={busy.links}>{busy.links ? "Mapping…" : "Map linkages with AI"}</button>
           <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use cases"}</button>
           <button style={btn.ai(C.navy)} onClick={arrange}>Arrange by theme</button>
@@ -404,12 +500,12 @@ function Board({ onBack }: { onBack: () => void }) {
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <div
           ref={canvasRef}
-          style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none", cursor: panDrag ? "grabbing" : drag ? "grabbing" : "grab" }}
+          style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none", cursor: connecting ? "crosshair" : panDrag ? "grabbing" : drag ? "grabbing" : "grab" }}
           onPointerDown={onCanvasDown}
           onDoubleClick={onCanvasDblClick}
           onPointerMove={onMove}
-          onPointerUp={onUp}
-          onPointerLeave={onUp}
+          onPointerUp={(e) => onUp(e)}
+          onPointerLeave={(e) => onUp(e)}
         >
           <Corner />
           <div
@@ -427,14 +523,32 @@ function Board({ onBack }: { onBack: () => void }) {
               {links.map((l, k) => {
                 const a = cards.find((c) => c.id === l.a), b = cards.find((c) => c.id === l.b);
                 if (!a || !b) return null;
-                const pa = center(a), pb = center(b), mx = (pa.x + pb.x) / 2;
+                const pa = center(a), pb = center(b), mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+                const manual = !!l.manual;
+                const pathD = `M ${pa.x} ${pa.y} C ${mx} ${pa.y}, ${mx} ${pb.y}, ${pb.x} ${pb.y}`;
+                const selected = selectedLinkIdx === k;
                 return (
-                  <g key={k}>
-                    <path className="link-path" d={`M ${pa.x} ${pa.y} C ${mx} ${pa.y}, ${mx} ${pb.y}, ${pb.x} ${pb.y}`} fill="none" stroke={C.blue} strokeWidth="2" strokeOpacity="0.55" />
-                    {l.reason && <text x={mx} y={(pa.y + pb.y) / 2 - 6} fill={C.navy} fontSize="11" textAnchor="middle">{l.reason}</text>}
+                  <g key={k} style={{ pointerEvents: "auto" }} data-link-ui onPointerDown={(e) => { e.stopPropagation(); setSelectedLinkIdx(k); setSelectedId(null); }}>
+                    <path d={pathD} fill="none" stroke="transparent" strokeWidth="14" />
+                    <path className={manual ? undefined : "link-path"} d={pathD} fill="none" stroke={manual ? C.navy : C.blue} strokeWidth="2" strokeOpacity={manual ? 1 : 0.55} />
+                    {l.reason && !manual && <text x={mx} y={my - 6} fill={C.navy} fontSize="11" textAnchor="middle" pointerEvents="none">{l.reason}</text>}
+                    {selected && (
+                      <g data-link-ui style={{ cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeLink(k); }}>
+                        <circle cx={mx} cy={my} r="10" fill={C.white} stroke={C.border} strokeWidth="1" />
+                        <text x={mx} y={my + 4} fill={C.navy} fontSize="13" fontWeight="700" textAnchor="middle">×</text>
+                      </g>
+                    )}
                   </g>
                 );
               })}
+              {connecting && connectCursor && (() => {
+                const from = cards.find((c) => c.id === connecting.fromId);
+                if (!from) return null;
+                const pa = center(from);
+                return (
+                  <line x1={pa.x} y1={pa.y} x2={connectCursor.x} y2={connectCursor.y} stroke={C.navy} strokeWidth="2" strokeDasharray="6 4" pointerEvents="none" />
+                );
+              })()}
             </svg>
 
             {cards.map((c) => {
@@ -514,6 +628,13 @@ function Board({ onBack }: { onBack: () => void }) {
                       onPointerDown={(e) => onResizeDown(e, c.id)}
                       style={{ position: "absolute", right: 4, bottom: 4, width: 12, height: 12, cursor: "nwse-resize", borderRight: `2px solid ${C.navy}`, borderBottom: `2px solid ${C.navy}`, opacity: 0.5, borderRadius: 1 }}
                     />
+                    <div
+                      className="connect-handle"
+                      data-card-action
+                      title="Drag to connect"
+                      onPointerDown={(e) => onConnectDown(e, c.id)}
+                      style={{ position: "absolute", right: -5, top: "50%", transform: "translateY(-50%)", width: 10, height: 10, borderRadius: 5, background: C.navy, border: `2px solid ${C.white}`, boxShadow: `0 0 0 1px ${C.border}`, cursor: "crosshair", zIndex: 6 }}
+                    />
                   </div>
                 </div>
               );
@@ -554,7 +675,51 @@ function Board({ onBack }: { onBack: () => void }) {
       </div>
 
       {showPack && <Pack cards={cards} insight={insight} onClose={() => setShowPack(false)} />}
+      {showCompare && (
+        <CompareModal
+          results={compareResults}
+          loading={busy.compare}
+          onClose={() => { setShowCompare(false); setCompareResults(null); }}
+        />
+      )}
       <div style={{ position: "absolute", left: 16, bottom: 6, fontSize: 11, color: "#9AA3B2" }}>Replace /public/logos and /public/deck with official assets.</div>
+    </div>
+  );
+}
+
+function CompareModal({ results, loading, onClose }: {
+  results: Record<AIProvider, { text: string; error?: string; loading?: boolean }> | null;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }} onClick={onClose}>
+      <div style={{ background: C.white, borderRadius: 16, padding: 30, width: "min(960px, 96%)", maxHeight: "88vh", overflow: "auto", boxShadow: "0 30px 80px rgba(10,22,40,.3)" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <h2 style={{ fontFamily: display, color: C.navy, margin: 0, fontSize: 22 }}>Compare models</h2>
+          <button style={btn.ghost} onClick={onClose}>Close</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+          {AI_PROVIDERS.map(({ id, label }) => {
+            const col = results?.[id];
+            const borderCol = id === "claude" ? C.blue : id === "gemini" ? C.mint : C.navy;
+            return (
+              <div key={id} style={{ border: `1.5px solid ${borderCol}`, borderRadius: 12, padding: 14, background: C.surface, minHeight: 180 }}>
+                <div style={{ fontWeight: 700, color: C.navy, marginBottom: 10, fontFamily: display }}>{label}</div>
+                {loading || col?.loading ? (
+                  <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>Loading…</p>
+                ) : col?.text ? (
+                  col.text.split("\n").filter(Boolean).map((line, k) => (
+                    <p key={k} style={{ fontSize: 13, lineHeight: 1.5, color: col.error && !col.text.startsWith("—") ? C.coral : C.navy, margin: "0 0 8px", paddingLeft: 8, borderLeft: `2px solid ${borderCol}` }}>{line}</p>
+                  ))
+                ) : (
+                  <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>No response</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
