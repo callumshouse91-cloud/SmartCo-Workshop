@@ -22,6 +22,19 @@ button:disabled { opacity: .55; cursor: default; }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
+.board-card .card-controls,
+.board-card .resize-handle,
+.board-card .card-dup { opacity: 0; pointer-events: none; transition: opacity .15s; }
+.board-card:hover .card-controls,
+.board-card:hover .resize-handle,
+.board-card:hover .card-dup,
+.board-card.card-selected .card-controls,
+.board-card.card-selected .resize-handle,
+.board-card.card-selected .card-dup { opacity: 1; pointer-events: auto; }
+.board-card.card-editing .card-controls,
+.board-card.card-editing .resize-handle,
+.board-card.card-editing .card-dup { opacity: 1; pointer-events: auto; }
+
 @media print {
   body * { visibility: hidden; }
   #print-area, #print-area * { visibility: visible; }

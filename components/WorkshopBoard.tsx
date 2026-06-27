@@ -6,6 +6,14 @@ import { DECK } from "./deck";
 
 const CARD_W = 216;
 const CARD_H = 104;
+const MIN_CARD_W = 140;
+const MIN_CARD_H = 80;
+const MAX_CARD_W = 520;
+const MAX_CARD_H = 420;
+const WORLD_W = 4000;
+const WORLD_H = 3000;
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 2.5;
 const STORE_KEY = "smartco-mufg-workshop";
 const WORKSHOP_ID = "mufg-2026-06-30"; // one row per workshop; change per session
 const display = "var(--font-outfit), system-ui, sans-serif";
@@ -18,6 +26,20 @@ const SEED = [
 
 let nid = 100;
 const newId = () => `c${++nid}`;
+
+const cardW = (c: { w?: number }) => c.w ?? CARD_W;
+const cardH = (c: { h?: number }) => c.h ?? CARD_H;
+const cardAccent = (c: { color?: string; theme: string }) => c.color ?? themeOf(c.theme).color;
+const cardFontSize = (c: { size?: number }) => c.size ?? 16;
+
+const PALETTE = [
+  { color: C.blue, label: "blue" },
+  { color: C.mint, label: "mint" },
+  { color: C.coral, label: "coral" },
+  { color: C.yellow, label: "yellow" },
+  { color: C.navy, label: "navy" },
+  { color: C.white, label: "white" },
+];
 
 export default function WorkshopBoard() {
   const [mode, setMode] = useState<"intro" | "board">("intro");
@@ -87,8 +109,20 @@ function Board({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState({ review: false, links: false, ideas: false });
   const [showPack, setShowPack] = useState(false);
   const [drag, setDrag] = useState<any>(null);
+  const [resize, setResize] = useState<{ id: string; startWx: number; startWy: number; startW: number; startH: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panDrag, setPanDrag] = useState<{ sx: number; sy: number; spx: number; spy: number } | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [editOriginal, setEditOriginal] = useState("");
   const canvasRef = useRef<HTMLDivElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  const zoomPanRef = useRef({ zoom: 1, panX: 0, panY: 0 });
   const loaded = useRef(false);
+
+  zoomPanRef.current = { zoom, panX: pan.x, panY: pan.y };
 
   useEffect(() => {
     (async () => {
@@ -134,35 +168,171 @@ function Board({ onBack }: { onBack: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards]);
 
-  const addCard = useCallback((t: string, th: string, ai = false) => {
+  useEffect(() => {
+    if (editingId && editRef.current) {
+      editRef.current.focus();
+      editRef.current.select();
+    }
+  }, [editingId]);
+
+  const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
+    setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  }, []);
+
+  const addCard = useCallback((t: string, th: string, ai = false, pos?: { x: number; y: number }, openEdit = false) => {
     const txt = (t || "").trim();
-    if (!txt) return;
+    if (!txt && !openEdit) return;
     const reg = THEMES.findIndex((x) => x.id === th);
-    const x = 90 + reg * 250 + Math.random() * 60;
-    const y = 320 + Math.random() * 140;
-    setCards((c) => [...c, { id: newId(), theme: th, text: txt, x, y, ai }]);
+    const x = pos?.x ?? 90 + reg * 250 + Math.random() * 60;
+    const y = pos?.y ?? 320 + Math.random() * 140;
+    const id = newId();
+    setCards((c) => [...c, { id, theme: th, text: txt, x, y, ai }]);
+    if (openEdit) {
+      setEditingId(id);
+      setEditText(txt);
+      setEditOriginal(txt);
+      setSelectedId(id);
+    }
+    return id;
   }, []);
 
   const submit = () => { addCard(text, theme); setText(""); };
   const removeCard = (id: string) => {
     setCards((c) => c.filter((x) => x.id !== id));
     setLinks((l) => l.filter((x) => x.a !== id && x.b !== id));
+    if (selectedId === id) setSelectedId(null);
+    if (editingId === id) { setEditingId(null); setEditText(""); }
   };
 
-  const onDown = (e: any, id: string) => {
-    const c = cards.find((x) => x.id === id);
-    const rect = canvasRef.current!.getBoundingClientRect();
-    setDrag({ id, dx: e.clientX - rect.left - c.x, dy: e.clientY - rect.top - c.y });
-    e.target.setPointerCapture?.(e.pointerId);
+  const finishEdit = (id: string, draft: string) => {
+    const trimmed = draft.trim();
+    if (!trimmed) removeCard(id);
+    else updateCard(id, { text: trimmed });
+    setEditingId(null);
+    setEditText("");
   };
-  const onMove = (e: any) => {
-    if (!drag) return;
+
+  const cancelEdit = (id: string) => {
+    if (!editOriginal.trim()) removeCard(id);
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const startEdit = (c: { id: string; text: string }) => {
+    setEditingId(c.id);
+    setEditText(c.text);
+    setEditOriginal(c.text);
+    setSelectedId(c.id);
+  };
+
+  const duplicateCard = (id: string) => {
+    const c = cards.find((x) => x.id === id);
+    if (!c) return;
+    const copy = { ...c, id: newId(), x: c.x + 24, y: c.y + 24 };
+    setCards((prev) => [...prev, copy]);
+    setSelectedId(copy.id);
+  };
+
+  const toWorld = useCallback((clientX: number, clientY: number) => {
     const rect = canvasRef.current!.getBoundingClientRect();
-    const x = Math.max(0, e.clientX - rect.left - drag.dx);
-    const y = Math.max(0, e.clientY - rect.top - drag.dy);
+    const { zoom: z, panX, panY } = zoomPanRef.current;
+    return {
+      x: (clientX - rect.left - panX) / z,
+      y: (clientY - rect.top - panY) / z,
+    };
+  }, []);
+
+  const zoomAtPoint = useCallback((newZoom: number, mx: number, my: number) => {
+    const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
+    const { zoom: z, panX, panY } = zoomPanRef.current;
+    const wx = (mx - panX) / z;
+    const wy = (my - panY) / z;
+    setPan({ x: mx - wx * clamped, y: my - wy * clamped });
+    setZoom(clamped);
+  }, []);
+
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const factor = Math.pow(0.995, e.deltaY);
+      zoomAtPoint(zoomPanRef.current.zoom * factor, mx, my);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomAtPoint]);
+
+  const onCanvasDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || editingId) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-board-ui]") || t.closest("[data-card]")) return;
+    setSelectedId(null);
+    setPanDrag({ sx: e.clientX, sy: e.clientY, spx: zoomPanRef.current.panX, spy: zoomPanRef.current.panY });
+    canvasRef.current?.setPointerCapture(e.pointerId);
+  };
+
+  const onCanvasDblClick = (e: React.MouseEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-board-ui]") || t.closest("[data-card]")) return;
+    const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+    addCard("", theme, false, { x: wx - CARD_W / 2, y: wy - CARD_H / 2 }, true);
+  };
+
+  const onDown = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    if (editingId) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-card-action]")) return;
+    const c = cards.find((x) => x.id === id);
+    if (!c) return;
+    setSelectedId(id);
+    const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+    setDrag({ id, dx: wx - c.x, dy: wy - c.y });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onResizeDown = (e: React.PointerEvent, id: string) => {
+    e.stopPropagation();
+    const c = cards.find((x) => x.id === id);
+    if (!c) return;
+    const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+    setResize({ id, startWx: wx, startWy: wy, startW: cardW(c), startH: cardH(c) });
+    setSelectedId(id);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onMove = (e: React.PointerEvent) => {
+    if (panDrag) {
+      setPan({ x: panDrag.spx + e.clientX - panDrag.sx, y: panDrag.spy + e.clientY - panDrag.sy });
+      return;
+    }
+    if (resize) {
+      const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+      const w = Math.min(MAX_CARD_W, Math.max(MIN_CARD_W, resize.startW + wx - resize.startWx));
+      const h = Math.min(MAX_CARD_H, Math.max(MIN_CARD_H, resize.startH + wy - resize.startWy));
+      setCards((c) => c.map((x0) => (x0.id === resize.id ? { ...x0, w, h } : x0)));
+      return;
+    }
+    if (!drag || editingId) return;
+    const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+    const x = Math.max(0, wx - drag.dx);
+    const y = Math.max(0, wy - drag.dy);
     setCards((c) => c.map((x0) => (x0.id === drag.id ? { ...x0, x, y } : x0)));
   };
-  const onUp = () => setDrag(null);
+
+  const onUp = () => { setDrag(null); setPanDrag(null); setResize(null); };
+
+  const zoomStep = (delta: number) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    zoomAtPoint(zoomPanRef.current.zoom + delta, rect.width / 2, rect.height / 2);
+  };
+
+  const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
   const arrange = () => {
     setCards((c) => c.map((card) => {
@@ -211,7 +381,7 @@ function Board({ onBack }: { onBack: () => void }) {
     setBusy((b) => ({ ...b, ideas: false }));
   }
 
-  const center = (c: any) => ({ x: c.x + CARD_W / 2, y: c.y + CARD_H / 2 });
+  const center = (c: any) => ({ x: c.x + cardW(c) / 2, y: c.y + cardH(c) / 2 });
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.surface, position: "relative" }}>
@@ -232,44 +402,137 @@ function Board({ onBack }: { onBack: () => void }) {
       </header>
 
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <div ref={canvasRef} style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none" }} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp}>
+        <div
+          ref={canvasRef}
+          style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none", cursor: panDrag ? "grabbing" : drag ? "grabbing" : "grab" }}
+          onPointerDown={onCanvasDown}
+          onDoubleClick={onCanvasDblClick}
+          onPointerMove={onMove}
+          onPointerUp={onUp}
+          onPointerLeave={onUp}
+        >
           <Corner />
-          <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-            {links.map((l, k) => {
-              const a = cards.find((c) => c.id === l.a), b = cards.find((c) => c.id === l.b);
-              if (!a || !b) return null;
-              const pa = center(a), pb = center(b), mx = (pa.x + pb.x) / 2;
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: WORLD_W,
+              height: WORLD_H,
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: "0 0",
+            }}
+          >
+            <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible" }}>
+              {links.map((l, k) => {
+                const a = cards.find((c) => c.id === l.a), b = cards.find((c) => c.id === l.b);
+                if (!a || !b) return null;
+                const pa = center(a), pb = center(b), mx = (pa.x + pb.x) / 2;
+                return (
+                  <g key={k}>
+                    <path className="link-path" d={`M ${pa.x} ${pa.y} C ${mx} ${pa.y}, ${mx} ${pb.y}, ${pb.x} ${pb.y}`} fill="none" stroke={C.blue} strokeWidth="2" strokeOpacity="0.55" />
+                    {l.reason && <text x={mx} y={(pa.y + pb.y) / 2 - 6} fill={C.navy} fontSize="11" textAnchor="middle">{l.reason}</text>}
+                  </g>
+                );
+              })}
+            </svg>
+
+            {cards.map((c) => {
+              const t = themeOf(c.theme);
+              const accent = cardAccent(c);
+              const w = cardW(c);
+              const h = cardH(c);
+              const fs = cardFontSize(c);
+              const isEditing = editingId === c.id;
+              const isSelected = selectedId === c.id;
               return (
-                <g key={k}>
-                  <path className="link-path" d={`M ${pa.x} ${pa.y} C ${mx} ${pa.y}, ${mx} ${pb.y}, ${pb.x} ${pb.y}`} fill="none" stroke={C.blue} strokeWidth="2" strokeOpacity="0.55" />
-                  {l.reason && <text x={mx} y={(pa.y + pb.y) / 2 - 6} fill={C.navy} fontSize="11" textAnchor="middle">{l.reason}</text>}
-                </g>
+                <div
+                  key={c.id}
+                  data-card
+                  className={`board-card${isSelected ? " card-selected" : ""}${isEditing ? " card-editing" : ""}`}
+                  style={{ position: "absolute", top: 0, left: 0, width: w, transform: `translate(${c.x}px, ${c.y}px)`, transition: drag?.id === c.id || resize?.id === c.id ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: drag?.id === c.id || isSelected || isEditing ? 20 : 5 }}
+                >
+                  <div
+                    className="card-pop"
+                    style={{ position: "relative", width: w, minHeight: h, background: C.white, border: `1px solid ${C.border}`, borderTop: `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: isEditing ? "text" : "grab", boxSizing: "border-box" }}
+                    onPointerDown={(e) => onDown(e, c.id)}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
+                      {c.ai && <span style={tag.ai}>AI</span>}
+                      <button className="card-dup" data-card-action style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.white, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 5, cursor: "pointer", lineHeight: 1.4 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => duplicateCard(c.id)} title="Duplicate">⧉</button>
+                      <button style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
+                    </div>
+
+                    <div className="card-controls" data-card-action style={{ position: "absolute", top: 34, left: 12, right: 12, display: "flex", alignItems: "center", gap: 6, zIndex: 4, background: "rgba(255,255,255,.92)", padding: "3px 4px", borderRadius: 6 }}>
+                      <div style={{ display: "flex", gap: 3 }}>
+                        {PALETTE.map((p) => (
+                          <button
+                            key={p.label}
+                            title={p.label}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => updateCard(c.id, { color: p.color })}
+                            style={{ width: 14, height: 14, borderRadius: 3, padding: 0, cursor: "pointer", background: p.color, border: c.color === p.color || (!c.color && p.color === t.color) ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent" }}
+                          />
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 2, marginLeft: "auto" }}>
+                        {([["S", 13], ["M", 16], ["L", 20]] as const).map(([label, px]) => (
+                          <button
+                            key={label}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => updateCard(c.id, { size: px })}
+                            style={{ border: `1px solid ${cardFontSize(c) === px ? C.navy : C.border}`, background: cardFontSize(c) === px ? C.surface : C.white, color: C.navy, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, cursor: "pointer", lineHeight: 1.4 }}
+                          >{label}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {isEditing ? (
+                      <textarea
+                        ref={editRef}
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onBlur={() => finishEdit(c.id, editText)}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finishEdit(c.id, editText); }
+                          if (e.key === "Escape") { e.preventDefault(); cancelEdit(c.id); }
+                        }}
+                        style={{ width: "100%", minHeight: h - 70, fontSize: fs, lineHeight: 1.35, color: C.navy, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", resize: "none", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                      />
+                    ) : (
+                      <div
+                        style={{ fontSize: fs, lineHeight: 1.35, color: C.navy, minHeight: 24, wordBreak: "break-word" }}
+                        onDoubleClick={(e) => { e.stopPropagation(); startEdit(c); }}
+                      >{c.text}</div>
+                    )}
+
+                    <div
+                      className="resize-handle"
+                      data-card-action
+                      onPointerDown={(e) => onResizeDown(e, c.id)}
+                      style={{ position: "absolute", right: 4, bottom: 4, width: 12, height: 12, cursor: "nwse-resize", borderRight: `2px solid ${C.navy}`, borderBottom: `2px solid ${C.navy}`, opacity: 0.5, borderRadius: 1 }}
+                    />
+                  </div>
+                </div>
               );
             })}
-          </svg>
+          </div>
 
-          {cards.map((c) => {
-            const t = themeOf(c.theme);
-            return (
-              <div key={c.id} style={{ position: "absolute", top: 0, left: 0, width: CARD_W, transform: `translate(${c.x}px, ${c.y}px)`, transition: drag?.id === c.id ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: drag?.id === c.id ? 20 : 5 }}>
-                <div className="card-pop" style={{ width: CARD_W, minHeight: CARD_H, background: C.white, border: `1px solid ${C.border}`, borderTop: `4px solid ${t.color}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: "grab", boxSizing: "border-box" }} onPointerDown={(e) => onDown(e, c.id)}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                    <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 120 }}>{t.label}</span>
-                    {c.ai && <span style={tag.ai}>AI</span>}
-                    <button style={{ marginLeft: "auto", border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
-                  </div>
-                  <div style={{ fontSize: 13.5, lineHeight: 1.35, color: C.navy }}>{c.text}</div>
-                </div>
-              </div>
-            );
-          })}
-
-          <div style={{ position: "absolute", left: "50%", bottom: 20, transform: "translateX(-50%)", display: "flex", gap: 8, background: C.white, padding: 8, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: "0 10px 30px rgba(10,22,40,.12)", width: "min(720px, 92%)" }}>
+          <div data-board-ui style={{ position: "absolute", left: "50%", bottom: 20, transform: "translateX(-50%)", display: "flex", gap: 8, background: C.white, padding: 8, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: "0 10px 30px rgba(10,22,40,.12)", width: "min(720px, 92%)", zIndex: 10 }}>
             <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "0 8px", fontSize: 13, color: C.navy, background: C.white }}>
               {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </select>
             <input style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }} placeholder="Type a pain point or use case, then Enter" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
             <button style={btn.primarySm} onClick={submit}>Add</button>
+          </div>
+
+          <div data-board-ui style={{ position: "absolute", right: 16, bottom: 20, display: "flex", alignItems: "center", gap: 4, zIndex: 10 }}>
+            <button style={btn.ghost} onClick={() => zoomStep(-0.15)} aria-label="Zoom out">−</button>
+            <span style={{ ...btn.ghost, cursor: "default", minWidth: 52, textAlign: "center", padding: "9px 10px" }}>{Math.round(zoom * 100)}%</span>
+            <button style={btn.ghost} onClick={() => zoomStep(0.15)} aria-label="Zoom in">+</button>
+            <button style={btn.ghost} onClick={resetView}>Reset</button>
           </div>
         </div>
 
