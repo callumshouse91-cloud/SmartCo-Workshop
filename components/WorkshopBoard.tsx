@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { C, THEMES, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider, type Theme } from "./brand";
 import { AskButton } from "@/components/AskPanel";
@@ -9,7 +10,8 @@ import {
   buildComparePrompt,
   buildLinkagesPrompt,
   buildReviewPrompt,
-  buildSuggestPrompt,
+  buildSingleSuggestPrompt,
+  buildClassifyPrompt,
 } from "@/lib/prompts";
 import { DECK, isImageSlide } from "./deck";
 import { renderDeckSlide } from "./IntroSlides";
@@ -166,7 +168,123 @@ type BoardData = {
   pan?: { x: number; y: number };
 };
 
-type SessionPayload = { boards: BoardData[]; activeId: string; customThemes?: Theme[] };
+type SessionPayload = {
+  boards: BoardData[];
+  activeId: string;
+  customThemes?: Theme[];
+  customDataPoints?: string[];
+  customImpacts?: string[];
+};
+
+const DEFAULT_DATA_POINTS = [
+  "SharePoint", "Excel", "Jira", "Confluence", "Outlook/Email", "Teams", "Planview", "ServiceNow", "N/A",
+];
+const DEFAULT_IMPACTS = [
+  "Hours saved / week", "Increased risk", "Quality issue", "Regulatory issue", "Visibility", "Insights",
+];
+const HOURS_IMPACT_TYPE = "Hours saved / week";
+const ADD_NEW_OPTION = "__add_new__";
+
+type CardImpact = { type: string; hours?: number };
+
+type WorkshopCard = {
+  id: string;
+  theme: string | null;
+  text: string;
+  description: string;
+  dataPoint: string;
+  impact: CardImpact | null;
+  x: number;
+  y: number;
+  ai: boolean;
+  classifying?: boolean;
+  color?: string;
+  size?: number;
+  w?: number;
+  h?: number;
+};
+
+function mergeStringOptions(defaults: string[], saved?: string[]): string[] {
+  const out = [...defaults];
+  const seen = new Set(out.map((s) => s.toLowerCase()));
+  for (const s of saved ?? []) {
+    const t = s?.trim();
+    if (!t) continue;
+    if (!seen.has(t.toLowerCase())) {
+      out.push(t);
+      seen.add(t.toLowerCase());
+    }
+  }
+  if (!seen.has("n/a")) out.push("N/A");
+  return out;
+}
+
+function extractCustomOptions(all: string[], defaults: string[]): string[] {
+  const def = new Set(defaults.map((s) => s.toLowerCase()));
+  return all.filter((s) => !def.has(s.toLowerCase()));
+}
+
+function normalizeCard(raw: any): WorkshopCard {
+  const text = typeof raw?.text === "string" ? raw.text : "";
+  const description = typeof raw?.description === "string" ? raw.description : text;
+  return {
+    ...raw,
+    id: raw.id || newId(),
+    theme: raw.theme ?? null,
+    text,
+    description: description || text,
+    dataPoint: typeof raw?.dataPoint === "string" ? raw.dataPoint : "N/A",
+    impact: raw?.impact?.type ? { type: raw.impact.type, hours: raw.impact.hours } : null,
+    x: typeof raw?.x === "number" ? raw.x : 0,
+    y: typeof raw?.y === "number" ? raw.y : 0,
+    ai: !!raw?.ai,
+    classifying: false,
+  };
+}
+
+function cardDescription(c: { description?: string; text?: string }) {
+  return (c.description ?? c.text ?? "").trim();
+}
+
+function impactLabel(impact: CardImpact | null | undefined): string {
+  if (!impact?.type) return "";
+  if (impact.type === HOURS_IMPACT_TYPE && impact.hours != null) return `${impact.hours} hrs/wk`;
+  return impact.type;
+}
+
+function matchOption(value: string | undefined, options: string[]): string | null {
+  if (!value?.trim()) return null;
+  const v = value.trim().toLowerCase();
+  const exact = options.find((o) => o.toLowerCase() === v);
+  if (exact) return exact;
+  return options.find((o) => v.includes(o.toLowerCase()) || o.toLowerCase().includes(v)) ?? null;
+}
+
+const chipStyle: React.CSSProperties = {
+  fontSize: 9,
+  fontWeight: 700,
+  padding: "2px 6px",
+  borderRadius: 4,
+  background: C.surface,
+  color: "#5A6478",
+  border: `1px solid ${C.border}`,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  maxWidth: "46%",
+};
+
+const fieldSelectStyle: React.CSSProperties = {
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  padding: "4px 6px",
+  fontSize: 11,
+  color: C.navy,
+  background: C.white,
+  fontWeight: 600,
+  width: "100%",
+  boxSizing: "border-box",
+};
 
 const DEFAULT_THEME_IDS = new Set(THEMES.map((t) => t.id));
 
@@ -232,7 +350,7 @@ const createBoard = (name: string, cards: any[] = [], links: any[] = [], insight
 });
 
 const defaultSession = (): SessionPayload => {
-  const board = createBoard("Board 1", [...SEED], [], "");
+  const board = createBoard("Board 1", SEED.map(normalizeCard), [], "");
   return { boards: [board], activeId: board.id };
 };
 
@@ -244,20 +362,20 @@ const normalizeSession = (v: any): SessionPayload => {
     const boards = v.boards.map((b: any, i: number) => ({
       id: b.id || newBoardId(),
       name: b.name || `Board ${i + 1}`,
-      cards: Array.isArray(b.cards) ? b.cards : [],
+      cards: Array.isArray(b.cards) ? b.cards.map(normalizeCard) : [],
       links: normalizeLinks(Array.isArray(b.links) ? b.links : []),
       insight: typeof b.insight === "string" ? b.insight : "",
       zoom: typeof b.zoom === "number" ? b.zoom : 1,
       pan: b.pan && typeof b.pan.x === "number" ? b.pan : { x: 0, y: 0 },
     }));
     const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
-    return { boards, activeId, customThemes };
+    return { boards, activeId, customThemes, customDataPoints: v.customDataPoints, customImpacts: v.customImpacts };
   }
   if (v && (Array.isArray(v.cards) || Array.isArray(v.links) || typeof v.insight === "string")) {
-    const board = createBoard("Board 1", v.cards ?? [], normalizeLinks(v.links ?? []), v.insight ?? "");
-    return { boards: [board], activeId: board.id, customThemes };
+    const board = createBoard("Board 1", (v.cards ?? []).map(normalizeCard), normalizeLinks(v.links ?? []), v.insight ?? "");
+    return { boards: [board], activeId: board.id, customThemes, customDataPoints: v.customDataPoints, customImpacts: v.customImpacts };
   }
-  return { ...defaultSession(), customThemes: undefined };
+  return { ...defaultSession(), customThemes: undefined, customDataPoints: undefined, customImpacts: undefined };
 };
 
 const boardSnapshot = (boards: BoardData[], activeId: string, zoom: number, pan: { x: number; y: number }) =>
@@ -267,8 +385,8 @@ const cardW = (c: { w?: number }) => c.w ?? CARD_W;
 const cardH = (c: { h?: number }) => c.h ?? CARD_H;
 const FIT_MIN = 11;
 const FIT_MAX = 28;
-const EDIT_MIN_W = 320;
-const EDIT_MIN_H = 200;
+const EDIT_MIN_W = 340;
+const EDIT_MIN_H = 280;
 const sizeCapMax = (c: { size?: number }) => c.size ?? FIT_MAX;
 
 const cardDisplayW = (c: { w?: number }, editing: boolean) => (editing ? Math.max(cardW(c), EDIT_MIN_W) : cardW(c));
@@ -312,8 +430,92 @@ const AI_PROVIDERS: { id: AIProvider; label: string }[] = [
   { id: "gpt", label: "GPT" },
 ];
 
+const PROVIDER_COLORS: Record<AIProvider, string> = {
+  claude: C.blue,
+  gemini: C.mint,
+  gpt: C.navy,
+};
+
+type SuggestCandidate = { text: string; error?: string; loading?: boolean };
+
+function parseSuggestCandidate(raw: string, apiError?: string): SuggestCandidate {
+  if (apiError) return { text: "", error: "Couldn't generate" };
+  const obj = parseJSON(raw);
+  if (obj && typeof obj.text === "string" && obj.text.trim()) {
+    return { text: obj.text.trim() };
+  }
+  const trimmed = raw?.trim();
+  if (trimmed) return { text: trimmed.replace(/^["']|["']$/g, "").slice(0, 120) };
+  return { text: "", error: "Couldn't generate" };
+}
+
 const findCardAtWorld = (cards: any[], wx: number, wy: number) =>
   cards.find((c) => wx >= c.x && wx <= c.x + cardW(c) && wy >= c.y && wy <= c.y + cardH(c));
+
+function OptionSelect({
+  label,
+  value,
+  options,
+  onChange,
+  onAddNew,
+  optional,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  onAddNew: (v: string) => void;
+  optional?: boolean;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const list = options.includes(value) ? options : value ? [...options, value] : options;
+
+  if (adding) {
+    return (
+      <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+        {label}
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          autoFocus
+          placeholder="New option"
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const t = draft.trim();
+              if (t) { onAddNew(t); onChange(t); }
+              setAdding(false);
+              setDraft("");
+            }
+            if (e.key === "Escape") { setAdding(false); setDraft(""); }
+          }}
+          onBlur={() => { setAdding(false); setDraft(""); }}
+          style={{ ...fieldSelectStyle, fontSize: 11 }}
+        />
+      </label>
+    );
+  }
+
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+      {label}
+      <select
+        value={value}
+        onChange={(e) => {
+          if (e.target.value === ADD_NEW_OPTION) setAdding(true);
+          else onChange(e.target.value);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        style={fieldSelectStyle}
+      >
+        {optional && <option value="">—</option>}
+        {list.map((o) => <option key={o} value={o}>{o}</option>)}
+        <option value={ADD_NEW_OPTION}>+ Add new…</option>
+      </select>
+    </label>
+  );
+}
 
 function BoardCard({
   c, isEditing, isSelected, isDragging, isResizing, controlsOpen,
@@ -322,8 +524,9 @@ function BoardCard({
   onEditChange, onFinishEdit, onCancelEdit,
   updateCard, duplicateCard, removeCard,
   themeOf, getCardAccent,
+  dataPoints, impacts, onAddDataPoint, onAddImpact,
 }: {
-  c: any;
+  c: WorkshopCard;
   isEditing: boolean;
   isSelected: boolean;
   isDragging: boolean;
@@ -334,7 +537,7 @@ function BoardCard({
   onDown: (e: React.PointerEvent, id: string) => void;
   onResizeDown: (e: React.PointerEvent, id: string) => void;
   onConnectDown: (e: React.PointerEvent, id: string) => void;
-  onStartEdit: (c: { id: string; text: string }) => void;
+  onStartEdit: (c: WorkshopCard) => void;
   onEditChange: (v: string) => void;
   onFinishEdit: (id: string, draft: string) => void;
   onCancelEdit: (id: string) => void;
@@ -343,6 +546,10 @@ function BoardCard({
   removeCard: (id: string) => void;
   themeOf: (id: string | null | undefined) => Theme | null;
   getCardAccent: (c: { color?: string; theme?: string | null }) => string;
+  dataPoints: string[];
+  impacts: string[];
+  onAddDataPoint: (v: string) => void;
+  onAddImpact: (v: string) => void;
 }) {
   const t = themeOf(c.theme);
   const uncategorised = !c.theme || !t;
@@ -350,8 +557,12 @@ function BoardCard({
   const displayW = cardDisplayW(c, isEditing);
   const displayH = cardDisplayH(c, isEditing);
   const maxFs = sizeCapMax(c);
+  const desc = cardDescription(c);
   const textRef = useRef<HTMLDivElement>(null);
   const [fitSize, setFitSize] = useState(maxFs);
+  const impLabel = impactLabel(c.impact);
+  const showDataChip = c.dataPoint && c.dataPoint !== "N/A";
+  const showImpactChip = !!impLabel;
 
   const remeasure = useCallback(() => {
     const el = isEditing ? editRef.current : textRef.current;
@@ -362,7 +573,7 @@ function BoardCard({
     } else {
       setFitSize(fitFontSize(el, maxFs));
     }
-  }, [isEditing, maxFs, editRef, c.text, displayW, displayH]);
+  }, [isEditing, maxFs, editRef, desc, displayW, displayH]);
 
   useLayoutEffect(() => { remeasure(); }, [remeasure, editText]);
 
@@ -396,6 +607,9 @@ function BoardCard({
             <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
           )}
           {c.ai && <span style={tag.ai}>AI</span>}
+          {c.classifying && (
+            <span style={{ ...tag.ai, background: C.surface, color: "#7A8499", fontSize: 9, fontWeight: 700 }}>AI…</span>
+          )}
           <button className="card-dup" data-card-action style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.white, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 5, cursor: "pointer", lineHeight: 1.4 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => duplicateCard(c.id)} title="Duplicate">⧉</button>
           {isEditing ? (
             <button
@@ -450,7 +664,44 @@ function BoardCard({
           </div>
         )}
 
-        <div data-card-body style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        {isEditing && (
+          <div data-card-action style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8, flexShrink: 0 }}>
+            <OptionSelect
+              label="Data point"
+              value={c.dataPoint || "N/A"}
+              options={dataPoints}
+              onChange={(v) => updateCard(c.id, { dataPoint: v })}
+              onAddNew={onAddDataPoint}
+            />
+            <div>
+              <OptionSelect
+                label="Impact"
+                optional
+                value={c.impact?.type ?? ""}
+                options={impacts}
+                onChange={(v) => {
+                  if (!v) updateCard(c.id, { impact: null });
+                  else updateCard(c.id, { impact: v === HOURS_IMPACT_TYPE ? { type: v, hours: c.impact?.hours ?? 1 } : { type: v } });
+                }}
+                onAddNew={onAddImpact}
+              />
+              {c.impact?.type === HOURS_IMPACT_TYPE && (
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={c.impact.hours ?? ""}
+                  onChange={(e) => updateCard(c.id, { impact: { type: HOURS_IMPACT_TYPE, hours: Number(e.target.value) || 0 } })}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  placeholder="hrs/wk"
+                  style={{ ...fieldSelectStyle, marginTop: 4, width: 72 }}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        <div data-card-body style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           {isEditing ? (
             <textarea
               ref={editRef}
@@ -462,13 +713,19 @@ function BoardCard({
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onFinishEdit(c.id, editText); }
                 if (e.key === "Escape") { e.preventDefault(); onCancelEdit(c.id); }
               }}
-              style={{ width: "100%", height: "100%", fontSize: fitSize, lineHeight: 1.35, color: C.navy, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px", resize: "none", outline: "none", fontFamily: "inherit", boxSizing: "border-box", overflow: "hidden" }}
+              style={{ flex: 1, width: "100%", minHeight: 0, fontSize: fitSize, lineHeight: 1.35, color: C.navy, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px", resize: "none", outline: "none", fontFamily: "inherit", boxSizing: "border-box", overflow: "hidden" }}
             />
           ) : (
             <div
               ref={textRef}
-              style={{ fontSize: fitSize, lineHeight: 1.35, color: C.navy, height: "100%", overflow: "hidden", wordBreak: "break-word" }}
-            >{c.text}</div>
+              style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word" }}
+            >{desc}</div>
+          )}
+          {!isEditing && (showDataChip || showImpactChip) && (
+            <div style={{ display: "flex", gap: 4, flexShrink: 0, marginTop: 6, flexWrap: "wrap" }}>
+              {showDataChip && <span style={chipStyle}>{c.dataPoint}</span>}
+              {showImpactChip && <span style={chipStyle}>{impLabel}</span>}
+            </div>
           )}
         </div>
 
@@ -659,110 +916,201 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   );
 }
 
-function NewCategoryPopover({ onCreate }: { onCreate: (label: string, color: string) => boolean }) {
+const SECTION_COL_W = 280;
+const SECTION_X0 = 70;
+const SECTION_TOP = 40;
+const SECTION_MIN_H = 480;
+const CATEGORY_POPOVER_Z = 10000;
+
+function ThemeSectionColumns({ themes, cards }: { themes: Theme[]; cards: any[] }) {
+  const columns: { key: string; label: string; color: string; index: number; themeId: string | null }[] = themes.map((t, i) => ({
+    key: t.id,
+    label: t.label,
+    color: t.color,
+    index: i,
+    themeId: t.id,
+  }));
+  columns.push({
+    key: "uncategorised",
+    label: "Uncategorised",
+    color: C.border,
+    index: themes.length,
+    themeId: null,
+  });
+
+  return (
+    <>
+      {columns.map((col) => {
+        const colCards = cards.filter((c) => (col.themeId ? c.theme === col.themeId : !c.theme));
+        const contentBottom = colCards.length
+          ? Math.max(...colCards.map((c) => c.y + cardH(c)))
+          : SECTION_TOP + SECTION_MIN_H;
+        const height = Math.max(SECTION_MIN_H, contentBottom - SECTION_TOP + 48);
+        return (
+          <div
+            key={col.key}
+            style={{
+              position: "absolute",
+              left: SECTION_X0 + col.index * SECTION_COL_W,
+              top: SECTION_TOP,
+              width: SECTION_COL_W - 20,
+              height,
+              borderRadius: 14,
+              border: `1.5px dashed ${col.color}55`,
+              background: `${col.color}0A`,
+              pointerEvents: "none",
+              zIndex: 0,
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                margin: "10px 12px 0",
+                padding: "7px 12px",
+                borderRadius: 8,
+                background: col.themeId ? col.color : C.white,
+                color: col.themeId ? C.white : C.navy,
+                border: col.themeId ? "none" : `1px solid ${C.border}`,
+                fontSize: 12,
+                fontWeight: 700,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {col.label}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean }) {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState("");
-  const [color, setColor] = useState(C.blue);
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: 0, bottom: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const updatePos = useCallback(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const width = 280;
+    setPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
+      bottom: window.innerHeight - r.top + 8,
+    });
+  }, []);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setLabel("");
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePos();
+    const onReflow = () => updatePos();
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, updatePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const t = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(t);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      close();
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
+  }, [open, close]);
 
   const handleCreate = () => {
-    if (onCreate(label, color)) {
+    if (onCreate(label)) {
       setLabel("");
-      setColor(C.blue);
       setOpen(false);
     }
   };
 
-  const popoverStyle: React.CSSProperties = {
-    position: "absolute",
-    bottom: "100%",
-    left: 0,
-    marginBottom: 8,
-    background: C.white,
-    border: `1px solid ${C.border}`,
-    borderRadius: 12,
-    boxShadow: "0 10px 30px rgba(10,22,40,.12)",
-    padding: 12,
-    width: 260,
-    zIndex: 30,
-  };
+  const panel = open ? (
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label="New category"
+      style={{
+        position: "fixed",
+        left: pos.left,
+        bottom: pos.bottom,
+        width: 280,
+        zIndex: CATEGORY_POPOVER_Z,
+        background: C.white,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        boxShadow: "0 10px 30px rgba(10,22,40,.12)",
+        padding: 12,
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>New category</div>
+      <input
+        ref={inputRef}
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="Category label"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleCreate();
+          if (e.key === "Escape") close();
+        }}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+          padding: "8px 10px",
+          fontSize: 13,
+          color: C.navy,
+          outline: "none",
+          marginBottom: 12,
+        }}
+      />
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" style={btn.ghost} onClick={close}>Cancel</button>
+        <button type="button" style={btn.primarySm} onClick={handleCreate} disabled={!label.trim()}>Create</button>
+      </div>
+    </div>
+  ) : null;
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
+    <>
       <button
+        ref={btnRef}
         type="button"
-        style={{ ...btn.ghost, fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap" }}
-        onClick={() => setOpen((v) => !v)}
+        style={{ ...btn.ghost, fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
+        onClick={() => {
+          if (open) close();
+          else {
+            updatePos();
+            setOpen(true);
+          }
+        }}
       >+ New category</button>
-      {open && (
-        <div style={popoverStyle} onPointerDown={(e) => e.stopPropagation()}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>New category</div>
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="Category label"
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleCreate();
-              if (e.key === "Escape") setOpen(false);
-            }}
-            style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, color: C.navy, outline: "none", marginBottom: 10 }}
-          />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            {CATEGORY_PALETTE.map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                title={p.label}
-                onClick={() => setColor(p.color)}
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 6,
-                  padding: 0,
-                  cursor: "pointer",
-                  background: p.color,
-                  border: color === p.color ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent",
-                }}
-              />
-            ))}
-            <label
-              title="Custom colour"
-              style={{
-                width: 22,
-                height: 22,
-                borderRadius: 6,
-                overflow: "hidden",
-                border: `1px solid ${C.border}`,
-                cursor: "pointer",
-                display: "block",
-                position: "relative",
-              }}
-            >
-              <input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                style={{ position: "absolute", inset: -4, width: 30, height: 30, border: "none", padding: 0, cursor: "pointer" }}
-              />
-            </label>
-          </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button type="button" style={btn.ghost} onClick={() => setOpen(false)}>Cancel</button>
-            <button type="button" style={btn.primarySm} onClick={handleCreate} disabled={!label.trim()}>Create</button>
-          </div>
-        </div>
-      )}
-    </div>
+      {typeof document !== "undefined" && panel ? createPortal(panel, document.body) : null}
+    </>
   );
 }
 
@@ -865,6 +1213,8 @@ function Board({ onBack }: { onBack: () => void }) {
   const [boards, setBoards] = useState<BoardData[]>(initial.boards);
   const [activeId, setActiveId] = useState(initial.activeId);
   const [themes, setThemes] = useState<Theme[]>(THEMES);
+  const [dataPoints, setDataPoints] = useState(DEFAULT_DATA_POINTS);
+  const [impacts, setImpacts] = useState(DEFAULT_IMPACTS);
   const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const renameOriginal = useRef("");
@@ -892,8 +1242,8 @@ function Board({ onBack }: { onBack: () => void }) {
       const board = bs.find((b) => b.id === aid) ?? bs[0];
       if (!board) return null;
       const labelFn = makeThemeLabel(themesRef.current);
-      const lines = (board.cards || []).map((c: { theme?: string | null; text: string }) =>
-        `[${labelFn(c.theme)}] ${c.text}`
+      const lines = (board.cards || []).map((c: WorkshopCard) =>
+        `[${labelFn(c.theme)}] ${cardDescription(c)}`
       );
       let out = `Board: ${board.name}`;
       if (lines.length) out += `\n${lines.join("\n")}`;
@@ -933,6 +1283,10 @@ function Board({ onBack }: { onBack: () => void }) {
   const [showPack, setShowPack] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [compareResults, setCompareResults] = useState<Record<AIProvider, { text: string; error?: string; loading?: boolean }> | null>(null);
+  const [showSuggestPicker, setShowSuggestPicker] = useState(false);
+  const [suggestCandidates, setSuggestCandidates] = useState<Record<AIProvider, SuggestCandidate> | null>(null);
+  const [selectedSuggestProvider, setSelectedSuggestProvider] = useState<AIProvider | null>(null);
+  const [suggestCategory, setSuggestCategory] = useState("accelerate");
   const [drag, setDrag] = useState<any>(null);
   const [resize, setResize] = useState<{ id: string; startWx: number; startWy: number; startW: number; startH: number } | null>(null);
   const [connecting, setConnecting] = useState<{ fromId: string } | null>(null);
@@ -984,6 +1338,8 @@ function Board({ onBack }: { onBack: () => void }) {
         setBoards(session.boards);
         setActiveId(session.activeId);
         setThemes(mergeThemes(session.customThemes));
+        setDataPoints(mergeStringOptions(DEFAULT_DATA_POINTS, session.customDataPoints));
+        setImpacts(mergeStringOptions(DEFAULT_IMPACTS, session.customImpacts));
         const active = session.boards.find((b) => b.id === session.activeId) ?? session.boards[0];
         setZoom(active?.zoom ?? 1);
         setPan(active?.pan ?? { x: 0, y: 0 });
@@ -1007,9 +1363,17 @@ function Board({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     if (!loaded.current) return;
     const payload: SessionPayload = {
-      boards: boardSnapshot(boards, activeId, zoom, pan),
+      boards: boardSnapshot(boards, activeId, zoom, pan).map((b) => ({
+        ...b,
+        cards: b.cards.map((c) => {
+          const { classifying, ...rest } = c as WorkshopCard;
+          return rest;
+        }),
+      })),
       activeId,
       customThemes: extractCustomThemes(themes),
+      customDataPoints: extractCustomOptions(dataPoints, DEFAULT_DATA_POINTS),
+      customImpacts: extractCustomOptions(impacts, DEFAULT_IMPACTS),
     };
     try { localStorage.setItem(STORE_KEY, JSON.stringify(payload)); } catch {}
     const t = setTimeout(() => {
@@ -1020,7 +1384,19 @@ function Board({ onBack }: { onBack: () => void }) {
       }).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [boards, activeId, zoom, pan, themes]);
+  }, [boards, activeId, zoom, pan, themes, dataPoints, impacts]);
+
+  const addDataPoint = useCallback((label: string) => {
+    const t = label.trim();
+    if (!t || t.toLowerCase() === "n/a") return;
+    setDataPoints((prev) => (prev.some((p) => p.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  }, []);
+
+  const addImpact = useCallback((label: string) => {
+    const t = label.trim();
+    if (!t) return;
+    setImpacts((prev) => (prev.some((p) => p.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  }, []);
 
   useEffect(() => {
     if (!themes.some((t) => t.id === theme)) {
@@ -1028,13 +1404,14 @@ function Board({ onBack }: { onBack: () => void }) {
     }
   }, [themes, theme]);
 
-  const createCategory = useCallback((label: string, color: string) => {
+  const createCategory = useCallback((label: string) => {
     const trimmed = label.trim();
     if (!trimmed) return false;
     const norm = trimmed.toLowerCase();
     if (themes.some((t) => t.label.trim().toLowerCase() === norm)) return false;
     const ids = new Set(themes.map((t) => t.id));
     const id = slugifyThemeId(trimmed, ids);
+    const color = CATEGORY_PALETTE[themes.length % CATEGORY_PALETTE.length].color;
     const newTheme: Theme = { id, label: trimmed, color };
     setThemes((prev) => [...prev, newTheme]);
     setTheme(id);
@@ -1070,16 +1447,72 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
     setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  }, []);
+  }, [setCards]);
+
+  const classifyCard = useCallback(async (cardId: string, input: string, currentTheme: string | null) => {
+    const seed = input.trim();
+    if (!seed) return;
+    updateCard(cardId, { classifying: true });
+    const { system, content } = buildClassifyPrompt(seed, {
+      dataPoints,
+      impacts,
+      themeIds: themes.map((t) => t.id),
+    });
+    try {
+      const { text, error } = await callAIResult(system, content, provider);
+      if (error) throw new Error(error);
+      const parsed = parseJSON(text) as {
+        description?: string;
+        dataPoint?: string;
+        impact?: { type?: string; hours?: number };
+        theme?: string;
+      } | null;
+      if (!parsed) throw new Error("parse failed");
+      const patch: Record<string, unknown> = {
+        classifying: false,
+        description: typeof parsed.description === "string" && parsed.description.trim() ? parsed.description.trim() : seed,
+        dataPoint: matchOption(parsed.dataPoint, dataPoints) ?? "N/A",
+      };
+      const impactType = matchOption(parsed.impact?.type, impacts);
+      if (impactType) {
+        patch.impact =
+          impactType === HOURS_IMPACT_TYPE
+            ? { type: impactType, hours: typeof parsed.impact?.hours === "number" ? parsed.impact.hours : undefined }
+            : { type: impactType };
+      } else {
+        patch.impact = null;
+      }
+      if (currentTheme == null && parsed.theme && themes.some((t) => t.id === parsed.theme)) {
+        patch.theme = parsed.theme;
+      }
+      updateCard(cardId, patch);
+    } catch {
+      updateCard(cardId, { classifying: false, description: seed, dataPoint: "N/A", impact: null });
+    }
+  }, [dataPoints, impacts, themes, provider, updateCard]);
 
   const addCard = useCallback((t: string, th: string | null, ai = false, pos?: { x: number; y: number }, openEdit = false) => {
     const txt = (t || "").trim();
     if (!txt && !openEdit) return;
     const reg = th == null ? themes.length : themes.findIndex((x) => x.id === th);
-    const x = pos?.x ?? 90 + (reg < 0 ? themes.length : reg) * 250 + Math.random() * 60;
+    const col = reg < 0 ? themes.length : reg;
+    const x = pos?.x ?? SECTION_X0 + col * SECTION_COL_W + Math.random() * 40;
     const y = pos?.y ?? 320 + Math.random() * 140;
     const id = newId();
-    setCards((c) => [...c, { id, theme: th, text: txt, x, y, ai }]);
+    const card: WorkshopCard = {
+      id,
+      theme: th,
+      text: txt,
+      description: txt,
+      dataPoint: "N/A",
+      impact: null,
+      x,
+      y,
+      ai,
+      classifying: !!txt && !openEdit,
+    };
+    setCards((c) => [...c, card]);
+    if (txt && !openEdit) void classifyCard(id, txt, th);
     if (openEdit) {
       setEditingId(id);
       setEditText(txt);
@@ -1087,7 +1520,7 @@ function Board({ onBack }: { onBack: () => void }) {
       setSelectedId(id);
     }
     return id;
-  }, [themes, setCards]);
+  }, [themes, setCards, classifyCard]);
 
   const submit = () => { addCard(text, theme); setText(""); };
   const removeCard = (id: string) => {
@@ -1100,7 +1533,16 @@ function Board({ onBack }: { onBack: () => void }) {
   const finishEdit = (id: string, draft: string) => {
     const trimmed = draft.trim();
     if (!trimmed) removeCard(id);
-    else updateCard(id, { text: trimmed });
+    else {
+      const card = cards.find((x) => x.id === id);
+      const wasBlank = !cardDescription(card || {});
+      updateCard(id, {
+        description: trimmed,
+        text: card?.text?.trim() ? card.text : trimmed,
+        classifying: wasBlank,
+      });
+      if (wasBlank) void classifyCard(id, card?.text?.trim() || trimmed, card?.theme ?? null);
+    }
     setEditingId(null);
     setEditText("");
   };
@@ -1111,10 +1553,10 @@ function Board({ onBack }: { onBack: () => void }) {
     setEditText("");
   };
 
-  const startEdit = (c: { id: string; text: string }) => {
+  const startEdit = (c: WorkshopCard) => {
     setEditingId(c.id);
-    setEditText(c.text);
-    setEditOriginal(c.text);
+    setEditText(cardDescription(c));
+    setEditOriginal(cardDescription(c));
     setSelectedId(c.id);
     setControlsCardId(null);
   };
@@ -1122,7 +1564,7 @@ function Board({ onBack }: { onBack: () => void }) {
   const duplicateCard = (id: string) => {
     const c = cards.find((x) => x.id === id);
     if (!c) return;
-    const copy = { ...c, id: newId(), x: c.x + 24, y: c.y + 24 };
+    const copy = { ...c, id: newId(), x: c.x + 24, y: c.y + 24, classifying: false };
     setCards((prev) => [...prev, copy]);
     setSelectedId(copy.id);
   };
@@ -1352,7 +1794,7 @@ function Board({ onBack }: { onBack: () => void }) {
       const col = reg < 0 ? themes.length : reg;
       const same = c.filter((k) => k.theme === card.theme);
       const row = same.indexOf(card);
-      return { ...card, x: 70 + col * 280, y: 80 + row * 122 };
+      return { ...card, x: SECTION_X0 + col * SECTION_COL_W, y: 80 + row * 122 };
     }));
   };
 
@@ -1410,19 +1852,44 @@ function Board({ onBack }: { onBack: () => void }) {
   async function suggestIdeas() {
     if (busy.ideas) return;
     setBusy((b) => ({ ...b, ideas: true }));
-    const { system, content } = buildSuggestPrompt(cards, {
-      labelFn: resolveThemeLabel,
-      themeIds: themes.map((t) => t.id),
-    });
-    const out = await callAI(system, content, provider);
-    const arr = parseJSON(out);
-    const defaultTheme = themes[0]?.id ?? "accelerate";
-    if (Array.isArray(arr)) arr.slice(0, 3).forEach((it: any, k: number) => {
-      const th = themes.some((t) => t.id === it.theme) ? it.theme : defaultTheme;
-      setTimeout(() => addCard(it.text, th, true), k * 220);
-    });
+    setShowSuggestPicker(true);
+    setSuggestCategory(theme);
+    setSelectedSuggestProvider(null);
+    const loading: SuggestCandidate = { text: "", loading: true };
+    setSuggestCandidates({ claude: { ...loading }, gemini: { ...loading }, gpt: { ...loading } });
+
+    const { system, content } = buildSingleSuggestPrompt(cards, resolveThemeLabel);
+
+    const tasks = AI_PROVIDERS.map(({ id }) =>
+      callAIResult(system, content, id).then(({ text, error }) => {
+        const candidate = parseSuggestCandidate(text, error);
+        setSuggestCandidates((prev) => ({
+          ...(prev ?? { claude: loading, gemini: loading, gpt: loading }),
+          [id]: { ...candidate, loading: false },
+        }));
+        if (candidate.text && !candidate.error) {
+          setSelectedSuggestProvider((sel) => sel ?? id);
+        }
+      })
+    );
+
+    await Promise.all(tasks);
     setBusy((b) => ({ ...b, ideas: false }));
   }
+
+  const closeSuggestPicker = () => {
+    setShowSuggestPicker(false);
+    setSuggestCandidates(null);
+    setSelectedSuggestProvider(null);
+  };
+
+  const confirmSuggestPick = () => {
+    if (!selectedSuggestProvider || !suggestCandidates) return;
+    const candidate = suggestCandidates[selectedSuggestProvider];
+    if (!candidate?.text || candidate.error) return;
+    addCard(candidate.text, suggestCategory, true);
+    closeSuggestPicker();
+  };
 
   const center = (c: any) => ({
     x: c.x + cardDisplayW(c, c.id === editingId) / 2,
@@ -1489,12 +1956,12 @@ function Board({ onBack }: { onBack: () => void }) {
               />
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use cases"}</button>
+              <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use case"}</button>
               <InfoButton
                 align="right"
-                title="Suggest use cases"
-                description="Generates three AI/delivery use-case ideas from the captured pains and adds them as new cards on the board."
-                prompt={() => buildSuggestPrompt(cards, { labelFn: resolveThemeLabel, themeIds: themes.map((t) => t.id) })}
+                title="Suggest use case"
+                description="Asks Claude, Gemini, and GPT each for one use-case idea from the board. Pick your favourite, choose a category, then add a single card."
+                prompt={() => buildSingleSuggestPrompt(cards, resolveThemeLabel)}
               />
             </span>
             <button style={btn.ai(C.navy)} onClick={arrange}>Arrange by theme</button>
@@ -1545,7 +2012,8 @@ function Board({ onBack }: { onBack: () => void }) {
               transformOrigin: "0 0",
             }}
           >
-            <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible" }}>
+            <ThemeSectionColumns themes={themes} cards={cards} />
+            <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible", zIndex: 1 }}>
               {links.map((l) => {
                 const link = l as LinkData;
                 const a = cards.find((c) => c.id === link.a);
@@ -1624,6 +2092,10 @@ function Board({ onBack }: { onBack: () => void }) {
                 removeCard={removeCard}
                 themeOf={resolveTheme}
                 getCardAccent={getCardAccent}
+                dataPoints={dataPoints}
+                impacts={impacts}
+                onAddDataPoint={addDataPoint}
+                onAddImpact={addImpact}
               />
             ))}
           </div>
@@ -1695,6 +2167,15 @@ function Board({ onBack }: { onBack: () => void }) {
                     onKeyDown={(e) => e.key === "Enter" && submit()}
                   />
                   <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={submit}>Add</button>
+                  <InfoButton
+                    title="Add card"
+                    description="Adds a card immediately, then AI expands it into a description and guesses the data point and impact. All fields stay fully editable on the card."
+                    prompt={() => buildClassifyPrompt(text.trim() || "Example pain point", {
+                      dataPoints,
+                      impacts,
+                      themeIds: themes.map((t) => t.id),
+                    })}
+                  />
                   <button type="button" style={{ ...btn.ghost, flexShrink: 0 }} onClick={addBlankBox}>Add blank box</button>
                 </div>
               </div>
@@ -1775,7 +2256,17 @@ function Board({ onBack }: { onBack: () => void }) {
         )}
       </div>
 
-      {showPack && <Pack boards={boards} activeId={activeId} themes={themes} customThemes={extractCustomThemes(themes)} onClose={() => setShowPack(false)} />}
+      {showPack && (
+        <Pack
+          boards={boards}
+          activeId={activeId}
+          themes={themes}
+          customThemes={extractCustomThemes(themes)}
+          customDataPoints={extractCustomOptions(dataPoints, DEFAULT_DATA_POINTS)}
+          customImpacts={extractCustomOptions(impacts, DEFAULT_IMPACTS)}
+          onClose={() => setShowPack(false)}
+        />
+      )}
       {showCompare && (
         <CompareModal
           results={compareResults}
@@ -1783,9 +2274,129 @@ function Board({ onBack }: { onBack: () => void }) {
           onClose={() => { setShowCompare(false); setCompareResults(null); }}
         />
       )}
+      {showSuggestPicker && (
+        <SuggestPickerModal
+          candidates={suggestCandidates}
+          selected={selectedSuggestProvider}
+          onSelect={setSelectedSuggestProvider}
+          category={suggestCategory}
+          onCategoryChange={setSuggestCategory}
+          themes={themes}
+          onAdd={confirmSuggestPick}
+          onClose={closeSuggestPicker}
+        />
+      )}
       {!collapsed.bottom && (
         <div style={{ position: "absolute", left: 16, bottom: 6, fontSize: 11, color: "#9AA3B2", pointerEvents: "none" }}>Replace /public/logos and /public/deck with official assets.</div>
       )}
+    </div>
+  );
+}
+
+function SuggestPickerModal({
+  candidates,
+  selected,
+  onSelect,
+  category,
+  onCategoryChange,
+  themes,
+  onAdd,
+  onClose,
+}: {
+  candidates: Record<AIProvider, SuggestCandidate> | null;
+  selected: AIProvider | null;
+  onSelect: (id: AIProvider) => void;
+  category: string;
+  onCategoryChange: (id: string) => void;
+  themes: Theme[];
+  onAdd: () => void;
+  onClose: () => void;
+}) {
+  const selectedCandidate = selected && candidates ? candidates[selected] : null;
+  const canAdd = !!(selectedCandidate?.text && !selectedCandidate.error && !selectedCandidate.loading);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }} onClick={onClose}>
+      <div style={{ background: C.white, borderRadius: 16, padding: 30, width: "min(720px, 96%)", maxHeight: "88vh", overflow: "auto", boxShadow: "0 30px 80px rgba(10,22,40,.3)" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <h2 style={{ fontFamily: display, color: C.navy, margin: 0, fontSize: 22 }}>Pick a use case</h2>
+          <button style={btn.ghost} onClick={onClose}>Cancel</button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {AI_PROVIDERS.map(({ id, label }) => {
+            const col = candidates?.[id];
+            const borderCol = PROVIDER_COLORS[id];
+            const isSelected = selected === id;
+            const selectable = !!(col?.text && !col.error && !col.loading);
+            return (
+              <button
+                key={id}
+                type="button"
+                disabled={!selectable}
+                onClick={() => selectable && onSelect(id)}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 12,
+                  textAlign: "left",
+                  width: "100%",
+                  border: `${isSelected ? 2.5 : 1.5}px solid ${isSelected ? borderCol : C.border}`,
+                  borderRadius: 12,
+                  padding: 14,
+                  background: isSelected ? C.surface : C.white,
+                  cursor: selectable ? "pointer" : "default",
+                  fontFamily: "inherit",
+                  opacity: col?.loading ? 0.85 : 1,
+                }}
+              >
+                <span
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 9,
+                    border: `2px solid ${isSelected ? borderCol : C.border}`,
+                    background: isSelected ? borderCol : C.white,
+                    flexShrink: 0,
+                    marginTop: 2,
+                    boxSizing: "border-box",
+                  }}
+                  aria-hidden
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: C.white, background: borderCol, padding: "2px 8px", borderRadius: 999 }}>{label}</span>
+                  </div>
+                  {col?.loading ? (
+                    <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>Loading…</p>
+                  ) : col?.error ? (
+                    <p style={{ color: C.coral, fontSize: 13, margin: 0 }}>Couldn't generate</p>
+                  ) : col?.text ? (
+                    <p style={{ fontSize: 14, lineHeight: 1.45, color: C.navy, margin: 0 }}>{col.text}</p>
+                  ) : (
+                    <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>No response</p>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${C.border}`, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.navy, fontWeight: 600 }}>
+            Category
+            <select
+              value={category}
+              onChange={(e) => onCategoryChange(e.target.value)}
+              style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, color: C.navy, background: C.white, fontWeight: 600 }}
+            >
+              {themes.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          </label>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button type="button" style={btn.ghost} onClick={onClose}>Cancel</button>
+            <button type="button" style={btn.primarySm} onClick={onAdd} disabled={!canAdd}>Add to board</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1837,7 +2448,20 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
         return (
           <div key={t.id} style={{ marginTop: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, color: C.navy }}><span style={{ width: 12, height: 12, borderRadius: 3, background: t.color }} /> {t.label}</div>
-            <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => <li key={c.id} style={{ color: C.navy, marginBottom: 4 }}>{c.text}{c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}</li>)}</ul>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => {
+              const desc = cardDescription(c);
+              const meta = [
+                c.dataPoint && c.dataPoint !== "N/A" ? c.dataPoint : null,
+                impactLabel(c.impact) || null,
+              ].filter(Boolean).join(" · ");
+              return (
+                <li key={c.id} style={{ color: C.navy, marginBottom: 6 }}>
+                  {desc}
+                  {meta && <span style={{ color: "#7A8499", fontSize: 12 }}> — {meta}</span>}
+                  {c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}
+                </li>
+              );
+            })}</ul>
           </div>
         );
       })}
@@ -1847,7 +2471,20 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
         return (
           <div key="uncategorised" style={{ marginTop: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, color: C.navy }}><span style={{ width: 12, height: 12, borderRadius: 3, background: C.border, border: `1px solid ${C.border}` }} /> Uncategorised</div>
-            <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => <li key={c.id} style={{ color: C.navy, marginBottom: 4 }}>{c.text}{c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}</li>)}</ul>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => {
+              const desc = cardDescription(c);
+              const meta = [
+                c.dataPoint && c.dataPoint !== "N/A" ? c.dataPoint : null,
+                impactLabel(c.impact) || null,
+              ].filter(Boolean).join(" · ");
+              return (
+                <li key={c.id} style={{ color: C.navy, marginBottom: 6 }}>
+                  {desc}
+                  {meta && <span style={{ color: "#7A8499", fontSize: 12 }}> — {meta}</span>}
+                  {c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}
+                </li>
+              );
+            })}</ul>
           </div>
         );
       })()}
@@ -1861,11 +2498,19 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
   );
 }
 
-function Pack({ boards, activeId, themes, customThemes, onClose }: { boards: BoardData[]; activeId: string; themes: Theme[]; customThemes: Theme[]; onClose: () => void }) {
+function Pack({ boards, activeId, themes, customThemes, customDataPoints, customImpacts, onClose }: {
+  boards: BoardData[];
+  activeId: string;
+  themes: Theme[];
+  customThemes: Theme[];
+  customDataPoints: string[];
+  customImpacts: string[];
+  onClose: () => void;
+}) {
   const [includeAll, setIncludeAll] = useState(false);
   const boardsToShow = includeAll ? boards : boards.filter((b) => b.id === activeId);
   const exportJSON = () => {
-    const blob = new Blob([JSON.stringify({ boards, activeId, customThemes }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ boards, activeId, customThemes, customDataPoints, customImpacts }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = "mufg-workshop-session.json"; a.click();
   };

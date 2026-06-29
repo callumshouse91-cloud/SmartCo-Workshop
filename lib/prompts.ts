@@ -2,7 +2,15 @@ import { themeLabel } from "@/components/brand";
 
 export type PromptPayload = { system: string; content: string };
 
-export type CaptureCard = { id: string; text: string; theme?: string | null };
+export type CaptureCard = {
+  id: string;
+  text: string;
+  theme?: string | null;
+  description?: string;
+  dataPoint?: string;
+  impact?: { type: string; hours?: number } | null;
+  classifying?: boolean;
+};
 
 export type ThemeLabelFn = (id: string | null | undefined) => string;
 
@@ -28,8 +36,23 @@ const RESEARCH_SYSTEM =
   '"pricing" (licensing model and rough price bands), "marketChanges" (recent launches, acquisitions, competitive moves). ' +
   "Each value: 2–4 concise sentences citing what you found. If uncertain, say so.";
 
+function cardLine(c: CaptureCard, labelFn: ThemeLabelFn): string {
+  const body = (c.description ?? c.text).trim();
+  const extras: string[] = [];
+  if (c.dataPoint && c.dataPoint !== "N/A") extras.push(`data: ${c.dataPoint}`);
+  if (c.impact?.type) {
+    const imp =
+      c.impact.type === "Hours saved / week" && c.impact.hours != null
+        ? `${c.impact.hours} hrs/wk saved`
+        : c.impact.type;
+    extras.push(`impact: ${imp}`);
+  }
+  const suffix = extras.length ? ` (${extras.join("; ")})` : "";
+  return `[${labelFn(c.theme)}] ${body}${suffix}`;
+}
+
 function formatCardLines(cards: CaptureCard[], labelFn: ThemeLabelFn = themeLabel): string {
-  return cards.map((c) => `[${labelFn(c.theme)}] ${c.text}`).join("\n");
+  return cards.map((c) => cardLine(c, labelFn)).join("\n");
 }
 
 export function buildReviewPrompt(cards: CaptureCard[], labelFn?: ThemeLabelFn): PromptPayload {
@@ -45,7 +68,11 @@ export function buildComparePrompt(cards: CaptureCard[], labelFn?: ThemeLabelFn)
 }
 
 export function buildLinkagesPrompt(cards: CaptureCard[]): PromptPayload {
-  const list = cards.map((c) => ({ id: c.id, text: c.text, theme: c.theme ?? "uncategorised" }));
+  const list = cards.map((c) => ({
+    id: c.id,
+    text: (c.description ?? c.text).trim(),
+    theme: c.theme ?? "uncategorised",
+  }));
   return {
     system:
       'Return ONLY a JSON array, no prose. Identify pairs of related captured items. Each element: {"a": id, "b": id, "reason": "<=6 words"}. Use only the provided ids. Max 6 pairs.',
@@ -63,6 +90,35 @@ export function buildSuggestPrompt(
     system:
       `Return ONLY a JSON array of 3 objects, no prose. Each: {"theme": "<one of: ${ids.join(", ")}>", "text": "<concise AI/delivery use-case idea, <=12 words>"}. Base them on the captured pains.`,
     content: lines || "No cards yet — suggest generic delivery AI use cases.",
+  };
+}
+
+export function buildSingleSuggestPrompt(
+  cards: CaptureCard[],
+  labelFn?: ThemeLabelFn
+): PromptPayload {
+  const lines = formatCardLines(cards, labelFn);
+  return {
+    system:
+      'Return ONLY JSON, no prose: {"text":"<concise AI/delivery use-case idea, <=12 words>"}. Base the idea on the captured pains on the board.',
+    content: lines || "No cards yet — suggest one generic delivery AI use case.",
+  };
+}
+
+export function buildClassifyPrompt(
+  input: string,
+  opts: { dataPoints: string[]; impacts: string[]; themeIds: string[] }
+): PromptPayload {
+  const dps = opts.dataPoints.filter((d) => d !== "N/A");
+  return {
+    system:
+      "You structure workshop capture cards. Return ONLY JSON, no prose: " +
+      '{"description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data points or N/A>","impact":{"type":"<one of the listed impact types>","hours":<number, only when type is Hours saved / week>},"theme":"<best-fit category id>"}. ' +
+      "Pick the closest existing option for dataPoint and impact.type; use N/A for dataPoint if none applies. " +
+      `Data points: ${[...dps, "N/A"].join(", ")}. ` +
+      `Impact types: ${opts.impacts.join(", ")}. ` +
+      `Category ids: ${opts.themeIds.join(", ")}.`,
+    content: input.trim(),
   };
 }
 
