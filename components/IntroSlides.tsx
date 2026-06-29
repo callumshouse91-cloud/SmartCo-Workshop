@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { C } from "./brand";
+import { C, SmartCoLogo } from "./brand";
 import { AIContainment } from "./AIContainment";
 import type {
   AgendaRow,
@@ -366,6 +366,136 @@ export function AgendaSlide({ title, rows }: { title: string; rows: AgendaRow[] 
   );
 }
 
+/** Client logos for the who-we-are strip — drop PNGs in /public/logos/clients/ */
+const WHO_WE_ARE_CLIENTS = [
+  { name: "Aviva", slug: "aviva" },
+  { name: "Hiscox", slug: "hiscox" },
+  { name: "Aston Martin", slug: "aston-martin" },
+  { name: "Boots", slug: "boots" },
+  { name: "Canada Life", slug: "canada-life" },
+  { name: "LSEG", slug: "lseg" },
+  { name: "OFX", slug: "ofx" },
+  { name: "reckitt", slug: "reckitt" },
+  { name: "vestacy", slug: "vestacy" },
+  { name: "WPP", slug: "wpp" },
+] as const;
+
+const WHO_VB_W = 1250;
+const WHO_VB_H = 720;
+const WHO_CX = 620;
+const WHO_CY = 360;
+const WHO_R = 232;
+const WHO_HEX_R = 58;
+
+type PracticeKey = "ai" | "cloud" | "cyber" | "apps" | "data";
+
+const PRACTICE_LAYOUT: { key: PracticeKey; match: (tag: string) => boolean; ox: number; oy: number; delay: number }[] = [
+  { key: "ai", match: (t) => t === "AI", ox: -62, oy: -44, delay: 1.28 },
+  { key: "cloud", match: (t) => t.includes("Cloud"), ox: 62, oy: -44, delay: 1.43 },
+  { key: "cyber", match: (t) => t.includes("Cyber"), ox: -124, oy: 46, delay: 1.58 },
+  { key: "apps", match: (t) => t.includes("Apps"), ox: 0, oy: 46, delay: 1.73 },
+  { key: "data", match: (t) => t.includes("Data"), ox: 124, oy: 46, delay: 1.88 },
+];
+
+const WHO_CALLOUT_SLOTS = [
+  { side: "left" as const, top: 29, index: 0, delay: 1.95 },
+  { side: "left" as const, top: 50, index: 1, delay: 2.03 },
+  { side: "left" as const, top: 69, index: 2, delay: 2.11 },
+  { side: "right" as const, top: 27, index: 3, delay: 2.19 },
+  { side: "right" as const, top: 48, index: 4, delay: 2.27 },
+];
+
+function whoHexPolygon(cx: number, cy: number, r: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 2;
+    pts.push(`${(cx + r * Math.cos(a)).toFixed(1)},${(cy + r * Math.sin(a)).toFixed(1)}`);
+  }
+  return pts.join(" ");
+}
+
+function whoHexPathLocal(r: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 2;
+    pts.push(`${(r * Math.cos(a)).toFixed(1)},${(r * Math.sin(a)).toFixed(1)}`);
+  }
+  return `M ${pts.join(" L ")} Z`;
+}
+
+function PracticeIcon({ kind }: { kind: PracticeKey }) {
+  switch (kind) {
+    case "ai":
+      return (
+        <g fill="#fff" aria-hidden>
+          <path d="M0,-9 L2.2,-2.2 L9,0 L2.2,2.2 L0,9 L-2.2,2.2 L-9,0 L-2.2,-2.2 Z" />
+        </g>
+      );
+    case "cloud":
+      return (
+        <g fill="#fff" aria-hidden>
+          <ellipse cx={0} cy={3} rx={9} ry={5.5} />
+          <circle cx={-5} cy={1} r={4.5} />
+          <circle cx={4} cy={0} r={5} />
+        </g>
+      );
+    case "cyber":
+      return (
+        <g fill="#fff" aria-hidden>
+          <path d="M0,-9 L8,-4 V3 C8,7 0,10 0,10 S-8,7 -8,3 V-4 Z" />
+        </g>
+      );
+    case "apps":
+      return (
+        <g fill="#fff" aria-hidden>
+          <rect x={-8} y={-8} width={7} height={7} rx={1} />
+          <rect x={1} y={-8} width={7} height={7} rx={1} />
+          <rect x={-8} y={1} width={7} height={7} rx={1} />
+          <rect x={1} y={1} width={7} height={7} rx={1} />
+        </g>
+      );
+    case "data":
+      return (
+        <g fill="#fff" aria-hidden>
+          <rect x={-8} y={-2} width={4} height={10} rx={1} />
+          <rect x={-2} y={-6} width={4} height={14} rx={1} />
+          <rect x={4} y={-4} width={4} height={12} rx={1} />
+        </g>
+      );
+  }
+}
+
+function ClientLogoItem({ name, slug }: { name: string; slug: string }) {
+  const [err, setErr] = useState(false);
+  if (err) return <span className="who-client-name">{name}</span>;
+  return (
+    <img
+      src={`/logos/clients/${slug}.png`}
+      alt={name}
+      className="who-client-logo"
+      onError={() => setErr(true)}
+    />
+  );
+}
+
+function WhoWeAreCalloutIcon() {
+  return (
+    <svg className="who-callout-hex" viewBox="-9 -10 18 20" aria-hidden>
+      <path d={whoHexPathLocal(8)} fill="none" stroke={C.blue} strokeWidth={1.8} />
+    </svg>
+  );
+}
+
+function TargetIcon() {
+  return (
+    <svg className="who-target-icon" viewBox="0 0 24 24" aria-hidden>
+      <circle cx={12} cy={12} r={9.5} fill="none" stroke={C.blue} strokeWidth={2} />
+      <circle cx={12} cy={12} r={5.5} fill="none" stroke={C.blue} strokeWidth={1.5} />
+      <circle cx={12} cy={12} r={2} fill={C.blue} />
+    </svg>
+  );
+}
+
 export function WhoWeAreSlide({
   eyebrow, title, tags, cards, closing,
 }: {
@@ -375,34 +505,157 @@ export function WhoWeAreSlide({
   cards: CapabilityCard[];
   closing: string;
 }) {
+  const practices = PRACTICE_LAYOUT.map((slot) => {
+    const label = tags.find(slot.match) ?? "";
+    return { ...slot, label };
+  });
+
   return (
-    <SlideFit dense wide className="intro-slide-has-corner">
-      <SlideCornerAccent />
-      <div className="intro-slide-split">
-        <div className="intro-slide-split-main">
-          <Eyebrow>{eyebrow}</Eyebrow>
-          <SlideTitle>{title}</SlideTitle>
-          <ul className="intro-hex-list">
-            {cards.map((c, i) => (
-              <HexBulletRow key={c.title} index={i} delay={0.32 + i * 0.08}>
-                <div className="intro-hex-title">{c.title}</div>
-                <div className="intro-hex-body">{c.desc}</div>
-              </HexBulletRow>
-            ))}
-          </ul>
-          <p {...stagger(cards.length, 0.36)} className="intro-slide-body intro-slide-closing">{closing}</p>
-        </div>
-        <aside className="intro-slide-panel intro-stagger" style={{ animationDelay: "0.4s" }}>
-          <div className="intro-tag-stack">
-            {tags.map((t, i) => (
-              <span key={t} className="intro-tag-pill" style={{ animationDelay: `${0.45 + i * 0.06}s` }}>
-                {t}
-              </span>
-            ))}
+    <div className="who-we-are-slide">
+      <Eyebrow>{eyebrow}</Eyebrow>
+      <SlideTitle className="who-we-are-title">{title}</SlideTitle>
+
+      <div className="who-we-are-body">
+        <div className="who-we-are-stage">
+          <svg
+            className="who-we-are-svg"
+            viewBox={`0 0 ${WHO_VB_W} ${WHO_VB_H}`}
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label="Advisory, Delivery and Optimisation cycle with five core practices"
+          >
+            <defs>
+              <path id="who-arc-advisory-text" d="M 458 218 A 232 232 0 0 1 782 218" fill="none" />
+              <path id="who-arc-delivery-text" d="M 822 295 A 232 232 0 0 1 668 575" fill="none" />
+              <path id="who-arc-optim-text" d="M 568 575 A 232 232 0 0 1 418 295" fill="none" />
+            </defs>
+
+            <path
+              d="M 442 211 A 232 232 0 0 1 798 211"
+              fill="none"
+              stroke={C.coral}
+              strokeWidth={40}
+              strokeLinecap="round"
+              pathLength={100}
+              className="who-ring-arc"
+              style={{ animationDelay: "0.3s" }}
+            />
+            <path
+              d="M 838 281 A 232 232 0 0 1 660 589"
+              fill="none"
+              stroke={C.yellow}
+              strokeWidth={40}
+              strokeLinecap="round"
+              pathLength={100}
+              className="who-ring-arc"
+              style={{ animationDelay: "0.7s" }}
+            />
+            <path
+              d="M 580 589 A 232 232 0 0 1 402 281"
+              fill="none"
+              stroke={C.mint}
+              strokeWidth={40}
+              strokeLinecap="round"
+              pathLength={100}
+              className="who-ring-arc"
+              style={{ animationDelay: "1.1s" }}
+            />
+
+            <g transform="translate(798,211) rotate(50)">
+              <g className="who-ring-arrow" style={{ animationDelay: "0.45s" }}>
+                <polygon points="0,-9 16,0 0,9" fill={C.coral} />
+              </g>
+            </g>
+            <g transform="translate(660,589) rotate(170)">
+              <g className="who-ring-arrow" style={{ animationDelay: "0.85s" }}>
+                <polygon points="0,-9 16,0 0,9" fill={C.yellow} />
+              </g>
+            </g>
+            <g transform="translate(402,281) rotate(-70)">
+              <g className="who-ring-arrow" style={{ animationDelay: "1.25s" }}>
+                <polygon points="0,-9 16,0 0,9" fill={C.mint} />
+              </g>
+            </g>
+
+            <text className="who-ring-label" fill={C.white} fontFamily={display} fontWeight={800}>
+              <textPath href="#who-arc-advisory-text" startOffset="50%" textAnchor="middle">
+                ADVISORY
+              </textPath>
+            </text>
+            <text className="who-ring-label" fill={C.white} fontFamily={display} fontWeight={800}>
+              <textPath href="#who-arc-delivery-text" startOffset="50%" textAnchor="middle">
+                DELIVERY
+              </textPath>
+            </text>
+            <text className="who-ring-label who-ring-label--long" fill={C.white} fontFamily={display} fontWeight={800}>
+              <textPath href="#who-arc-optim-text" startOffset="50%" textAnchor="middle">
+                OPTIMISATION
+              </textPath>
+            </text>
+
+            {practices.map((p) => {
+              const hx = WHO_CX + p.ox;
+              const hy = WHO_CY + p.oy;
+              const innerW = Math.sqrt(3) * WHO_HEX_R * 1.05;
+              return (
+                <g key={p.key} transform={`translate(${hx}, ${hy})`}>
+                  <g className="who-practice-hex" style={{ animationDelay: `${p.delay}s` }}>
+                    <polygon points={whoHexPolygon(0, 0, WHO_HEX_R)} fill={C.blue} />
+                    <g transform="translate(0,-16)">
+                      <PracticeIcon kind={p.key} />
+                    </g>
+                    <foreignObject x={-innerW / 2} y={6} width={innerW} height={WHO_HEX_R * 0.88} xmlns="http://www.w3.org/1999/xhtml">
+                      <div className="who-hex-label">{p.label}</div>
+                    </foreignObject>
+                  </g>
+                </g>
+              );
+            })}
+          </svg>
+
+          <div className="who-we-are-html">
+            {WHO_CALLOUT_SLOTS.map((slot) => {
+              const card = cards[slot.index];
+              if (!card) return null;
+              return (
+                <div
+                  key={slot.index}
+                  className={`who-callout who-callout--${slot.side} intro-stagger`}
+                  style={{
+                    top: `${slot.top}%`,
+                    animationDelay: `${slot.delay}s`,
+                  }}
+                >
+                  <WhoWeAreCalloutIcon />
+                  <div className="who-callout-copy">
+                    <div className="who-callout-title">{card.title}</div>
+                    <div className="who-callout-desc">{card.desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="who-integrated-box intro-stagger" style={{ animationDelay: "2.35s" }}>
+              <TargetIcon />
+              <p className="who-integrated-text">{closing}</p>
+            </div>
           </div>
-        </aside>
+        </div>
+
+        <div className="who-client-strip intro-stagger" style={{ animationDelay: "2.45s" }}>
+          <div className="who-client-strip-inner">
+            <div className="who-client-smartco">
+              <SmartCoLogo scale={0.68} />
+            </div>
+            <div className="who-client-logos">
+              {WHO_WE_ARE_CLIENTS.map((c) => (
+                <ClientLogoItem key={c.slug} name={c.name} slug={c.slug} />
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
-    </SlideFit>
+    </div>
   );
 }
 

@@ -7,13 +7,15 @@ export const C = {
   coral: "#E65C43", body: "#4B5563",
 };
 
-export const THEMES = [
+export type Theme = { id: string; label: string; color: string };
+
+export const THEMES: Theme[] = [
   { id: "accelerate", label: "Accelerate delivery", color: C.blue },
   { id: "manual", label: "Reduce manual effort", color: C.mint },
   { id: "quality", label: "Quality & confidence", color: C.coral },
 ];
-export const themeOf = (id: string | null | undefined) =>
-  id ? THEMES.find((t) => t.id === id) ?? THEMES[0] : null;
+export const themeOf = (id: string | null | undefined): Theme | null =>
+  id ? THEMES.find((t) => t.id === id) ?? null : null;
 export const themeLabel = (id: string | null | undefined) =>
   themeOf(id)?.label ?? "Uncategorised";
 

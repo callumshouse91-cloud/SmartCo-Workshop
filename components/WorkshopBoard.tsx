@@ -1,7 +1,7 @@
 "use client";
-import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from "react";
 import Link from "next/link";
-import { C, THEMES, themeOf, themeLabel, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider } from "./brand";
+import { C, THEMES, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider, type Theme } from "./brand";
 import { AskButton } from "@/components/AskPanel";
 import { useRegisterAskContext } from "@/components/AskContext";
 import { InfoButton } from "@/components/InfoButton";
@@ -166,7 +166,60 @@ type BoardData = {
   pan?: { x: number; y: number };
 };
 
-type SessionPayload = { boards: BoardData[]; activeId: string };
+type SessionPayload = { boards: BoardData[]; activeId: string; customThemes?: Theme[] };
+
+const DEFAULT_THEME_IDS = new Set(THEMES.map((t) => t.id));
+
+function makeThemeOf(themes: Theme[]) {
+  return (id: string | null | undefined): Theme | null =>
+    id ? themes.find((t) => t.id === id) ?? null : null;
+}
+
+function makeThemeLabel(themes: Theme[]) {
+  const resolve = makeThemeOf(themes);
+  return (id: string | null | undefined) => resolve(id)?.label ?? "Uncategorised";
+}
+
+function extractCustomThemes(themes: Theme[]): Theme[] {
+  return themes.filter((t) => !DEFAULT_THEME_IDS.has(t.id));
+}
+
+function mergeThemes(saved?: Theme[]): Theme[] {
+  const merged: Theme[] = [...THEMES];
+  const ids = new Set(merged.map((t) => t.id));
+  const labels = new Set(merged.map((t) => t.label.trim().toLowerCase()));
+  for (const t of saved ?? []) {
+    if (!t?.id || !t?.label || !t?.color) continue;
+    if (ids.has(t.id)) continue;
+    const norm = t.label.trim().toLowerCase();
+    if (labels.has(norm)) continue;
+    merged.push({ id: t.id, label: t.label.trim(), color: t.color });
+    ids.add(t.id);
+    labels.add(norm);
+  }
+  return merged;
+}
+
+function slugifyThemeId(label: string, existing: Set<string>): string {
+  let base = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!base) base = "category";
+  let id = base;
+  let n = 2;
+  while (existing.has(id)) {
+    id = `${base}-${n++}`;
+  }
+  return id;
+}
+
+function cardAccentFor(themes: Theme[]) {
+  const resolve = makeThemeOf(themes);
+  return (c: { color?: string; theme?: string | null }) =>
+    c.color ?? (c.theme ? resolve(c.theme)?.color ?? C.border : C.border);
+}
 
 const createBoard = (name: string, cards: any[] = [], links: any[] = [], insight = ""): BoardData => ({
   id: newBoardId(),
@@ -184,6 +237,9 @@ const defaultSession = (): SessionPayload => {
 };
 
 const normalizeSession = (v: any): SessionPayload => {
+  const customThemes = Array.isArray(v?.customThemes)
+    ? v.customThemes.filter((t: Theme) => t?.id && t?.label && t?.color)
+    : undefined;
   if (v?.boards?.length) {
     const boards = v.boards.map((b: any, i: number) => ({
       id: b.id || newBoardId(),
@@ -195,13 +251,13 @@ const normalizeSession = (v: any): SessionPayload => {
       pan: b.pan && typeof b.pan.x === "number" ? b.pan : { x: 0, y: 0 },
     }));
     const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
-    return { boards, activeId };
+    return { boards, activeId, customThemes };
   }
   if (v && (Array.isArray(v.cards) || Array.isArray(v.links) || typeof v.insight === "string")) {
     const board = createBoard("Board 1", v.cards ?? [], normalizeLinks(v.links ?? []), v.insight ?? "");
-    return { boards: [board], activeId: board.id };
+    return { boards: [board], activeId: board.id, customThemes };
   }
-  return defaultSession();
+  return { ...defaultSession(), customThemes: undefined };
 };
 
 const boardSnapshot = (boards: BoardData[], activeId: string, zoom: number, pan: { x: number; y: number }) =>
@@ -209,8 +265,6 @@ const boardSnapshot = (boards: BoardData[], activeId: string, zoom: number, pan:
 
 const cardW = (c: { w?: number }) => c.w ?? CARD_W;
 const cardH = (c: { h?: number }) => c.h ?? CARD_H;
-const cardAccent = (c: { color?: string; theme?: string | null }) =>
-  c.color ?? (c.theme ? themeOf(c.theme)!.color : C.border);
 const FIT_MIN = 11;
 const FIT_MAX = 28;
 const EDIT_MIN_W = 320;
@@ -245,6 +299,13 @@ const PALETTE = [
   { color: C.white, label: "white" },
 ];
 
+const CATEGORY_PALETTE = [
+  ...PALETTE,
+  { color: C.blueDark, label: "blue-dark" },
+  { color: "#9333EA", label: "purple" },
+  { color: "#0D9488", label: "teal" },
+];
+
 const AI_PROVIDERS: { id: AIProvider; label: string }[] = [
   { id: "claude", label: "Claude" },
   { id: "gemini", label: "Gemini" },
@@ -260,6 +321,7 @@ function BoardCard({
   onDown, onResizeDown, onConnectDown, onStartEdit,
   onEditChange, onFinishEdit, onCancelEdit,
   updateCard, duplicateCard, removeCard,
+  themeOf, getCardAccent,
 }: {
   c: any;
   isEditing: boolean;
@@ -279,10 +341,12 @@ function BoardCard({
   updateCard: (id: string, patch: Record<string, unknown>) => void;
   duplicateCard: (id: string) => void;
   removeCard: (id: string) => void;
+  themeOf: (id: string | null | undefined) => Theme | null;
+  getCardAccent: (c: { color?: string; theme?: string | null }) => string;
 }) {
   const t = themeOf(c.theme);
-  const uncategorised = !c.theme;
-  const accent = cardAccent(c);
+  const uncategorised = !c.theme || !t;
+  const accent = getCardAccent(c);
   const displayW = cardDisplayW(c, isEditing);
   const displayH = cardDisplayH(c, isEditing);
   const maxFs = sizeCapMax(c);
@@ -595,6 +659,113 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   );
 }
 
+function NewCategoryPopover({ onCreate }: { onCreate: (label: string, color: string) => boolean }) {
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState("");
+  const [color, setColor] = useState(C.blue);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const handleCreate = () => {
+    if (onCreate(label, color)) {
+      setLabel("");
+      setColor(C.blue);
+      setOpen(false);
+    }
+  };
+
+  const popoverStyle: React.CSSProperties = {
+    position: "absolute",
+    bottom: "100%",
+    left: 0,
+    marginBottom: 8,
+    background: C.white,
+    border: `1px solid ${C.border}`,
+    borderRadius: 12,
+    boxShadow: "0 10px 30px rgba(10,22,40,.12)",
+    padding: 12,
+    width: 260,
+    zIndex: 30,
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        type="button"
+        style={{ ...btn.ghost, fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap" }}
+        onClick={() => setOpen((v) => !v)}
+      >+ New category</button>
+      {open && (
+        <div style={popoverStyle} onPointerDown={(e) => e.stopPropagation()}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>New category</div>
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="Category label"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleCreate();
+              if (e.key === "Escape") setOpen(false);
+            }}
+            style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, color: C.navy, outline: "none", marginBottom: 10 }}
+          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+            {CATEGORY_PALETTE.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                title={p.label}
+                onClick={() => setColor(p.color)}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  padding: 0,
+                  cursor: "pointer",
+                  background: p.color,
+                  border: color === p.color ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent",
+                }}
+              />
+            ))}
+            <label
+              title="Custom colour"
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                overflow: "hidden",
+                border: `1px solid ${C.border}`,
+                cursor: "pointer",
+                display: "block",
+                position: "relative",
+              }}
+            >
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                style={{ position: "absolute", inset: -4, width: 30, height: 30, border: "none", padding: 0, cursor: "pointer" }}
+              />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" style={btn.ghost} onClick={() => setOpen(false)}>Cancel</button>
+            <button type="button" style={btn.primarySm} onClick={handleCreate} disabled={!label.trim()}>Create</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BoardTabBar({
   boards, activeId, renamingId, renameDraft,
   onSwitch, onAdd, onDelete, onStartRename, onRenameDraft, onFinishRename,
@@ -693,6 +864,7 @@ function Board({ onBack }: { onBack: () => void }) {
   const initial = defaultSession();
   const [boards, setBoards] = useState<BoardData[]>(initial.boards);
   const [activeId, setActiveId] = useState(initial.activeId);
+  const [themes, setThemes] = useState<Theme[]>(THEMES);
   const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const renameOriginal = useRef("");
@@ -706,14 +878,22 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const boardCtxRef = useRef({ boards, activeId });
   boardCtxRef.current = { boards, activeId };
+  const themesRef = useRef(themes);
+  themesRef.current = themes;
+
+  const resolveTheme = useMemo(() => makeThemeOf(themes), [themes]);
+  const resolveThemeLabel = useMemo(() => makeThemeLabel(themes), [themes]);
+  const getCardAccent = useMemo(() => cardAccentFor(themes), [themes]);
+
   useRegisterAskContext({
     label: "Include current board",
     getContext: () => {
       const { boards: bs, activeId: aid } = boardCtxRef.current;
       const board = bs.find((b) => b.id === aid) ?? bs[0];
       if (!board) return null;
+      const labelFn = makeThemeLabel(themesRef.current);
       const lines = (board.cards || []).map((c: { theme?: string | null; text: string }) =>
-        `[${themeLabel(c.theme)}] ${c.text}`
+        `[${labelFn(c.theme)}] ${c.text}`
       );
       let out = `Board: ${board.name}`;
       if (lines.length) out += `\n${lines.join("\n")}`;
@@ -803,6 +983,7 @@ function Board({ onBack }: { onBack: () => void }) {
         const session = normalizeSession(raw);
         setBoards(session.boards);
         setActiveId(session.activeId);
+        setThemes(mergeThemes(session.customThemes));
         const active = session.boards.find((b) => b.id === session.activeId) ?? session.boards[0];
         setZoom(active?.zoom ?? 1);
         setPan(active?.pan ?? { x: 0, y: 0 });
@@ -825,7 +1006,11 @@ function Board({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     if (!loaded.current) return;
-    const payload = { boards: boardSnapshot(boards, activeId, zoom, pan), activeId };
+    const payload: SessionPayload = {
+      boards: boardSnapshot(boards, activeId, zoom, pan),
+      activeId,
+      customThemes: extractCustomThemes(themes),
+    };
     try { localStorage.setItem(STORE_KEY, JSON.stringify(payload)); } catch {}
     const t = setTimeout(() => {
       fetch("/api/session", {
@@ -835,7 +1020,26 @@ function Board({ onBack }: { onBack: () => void }) {
       }).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [boards, activeId, zoom, pan]);
+  }, [boards, activeId, zoom, pan, themes]);
+
+  useEffect(() => {
+    if (!themes.some((t) => t.id === theme)) {
+      setTheme(themes[0]?.id ?? "accelerate");
+    }
+  }, [themes, theme]);
+
+  const createCategory = useCallback((label: string, color: string) => {
+    const trimmed = label.trim();
+    if (!trimmed) return false;
+    const norm = trimmed.toLowerCase();
+    if (themes.some((t) => t.label.trim().toLowerCase() === norm)) return false;
+    const ids = new Set(themes.map((t) => t.id));
+    const id = slugifyThemeId(trimmed, ids);
+    const newTheme: Theme = { id, label: trimmed, color };
+    setThemes((prev) => [...prev, newTheme]);
+    setTheme(id);
+    return true;
+  }, [themes]);
 
   useEffect(() => {
     if (!cards.length) return;
@@ -871,8 +1075,8 @@ function Board({ onBack }: { onBack: () => void }) {
   const addCard = useCallback((t: string, th: string | null, ai = false, pos?: { x: number; y: number }, openEdit = false) => {
     const txt = (t || "").trim();
     if (!txt && !openEdit) return;
-    const reg = th == null ? THEMES.length : THEMES.findIndex((x) => x.id === th);
-    const x = pos?.x ?? 90 + reg * 250 + Math.random() * 60;
+    const reg = th == null ? themes.length : themes.findIndex((x) => x.id === th);
+    const x = pos?.x ?? 90 + (reg < 0 ? themes.length : reg) * 250 + Math.random() * 60;
     const y = pos?.y ?? 320 + Math.random() * 140;
     const id = newId();
     setCards((c) => [...c, { id, theme: th, text: txt, x, y, ai }]);
@@ -883,7 +1087,7 @@ function Board({ onBack }: { onBack: () => void }) {
       setSelectedId(id);
     }
     return id;
-  }, []);
+  }, [themes, setCards]);
 
   const submit = () => { addCard(text, theme); setText(""); };
   const removeCard = (id: string) => {
@@ -1144,14 +1348,15 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const arrange = () => {
     setCards((c) => c.map((card) => {
-      const reg = card.theme == null ? THEMES.length : THEMES.findIndex((t) => t.id === card.theme);
+      const reg = card.theme == null ? themes.length : themes.findIndex((t) => t.id === card.theme);
+      const col = reg < 0 ? themes.length : reg;
       const same = c.filter((k) => k.theme === card.theme);
       const row = same.indexOf(card);
-      return { ...card, x: 70 + reg * 280, y: 80 + row * 122 };
+      return { ...card, x: 70 + col * 280, y: 80 + row * 122 };
     }));
   };
 
-  const reviewPrompt = () => buildReviewPrompt(cards);
+  const reviewPrompt = () => buildReviewPrompt(cards, resolveThemeLabel);
 
   async function runReview() {
     if (busy.review || !cards.length) return;
@@ -1168,7 +1373,7 @@ function Board({ onBack }: { onBack: () => void }) {
     setBusy((b) => ({ ...b, compare: true }));
     const loading = { text: "", loading: true };
     setCompareResults({ claude: { ...loading }, gemini: { ...loading }, gpt: { ...loading } });
-    const { system, content } = buildComparePrompt(cards);
+    const { system, content } = buildComparePrompt(cards, resolveThemeLabel);
     const results = await Promise.all(
       AI_PROVIDERS.map(async ({ id }) => {
         const { text, error } = await callAIResult(system, content, id);
@@ -1205,11 +1410,15 @@ function Board({ onBack }: { onBack: () => void }) {
   async function suggestIdeas() {
     if (busy.ideas) return;
     setBusy((b) => ({ ...b, ideas: true }));
-    const { system, content } = buildSuggestPrompt(cards);
+    const { system, content } = buildSuggestPrompt(cards, {
+      labelFn: resolveThemeLabel,
+      themeIds: themes.map((t) => t.id),
+    });
     const out = await callAI(system, content, provider);
     const arr = parseJSON(out);
+    const defaultTheme = themes[0]?.id ?? "accelerate";
     if (Array.isArray(arr)) arr.slice(0, 3).forEach((it: any, k: number) => {
-      const th = THEMES.some((t) => t.id === it.theme) ? it.theme : "accelerate";
+      const th = themes.some((t) => t.id === it.theme) ? it.theme : defaultTheme;
       setTimeout(() => addCard(it.text, th, true), k * 220);
     });
     setBusy((b) => ({ ...b, ideas: false }));
@@ -1267,7 +1476,7 @@ function Board({ onBack }: { onBack: () => void }) {
                 align="right"
                 title="Compare models"
                 description="Sends the same prompt to Claude, Gemini, and GPT in parallel and shows the three answers side by side for comparison."
-                prompt={() => buildComparePrompt(cards)}
+                prompt={() => buildComparePrompt(cards, resolveThemeLabel)}
               />
             </span>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -1285,7 +1494,7 @@ function Board({ onBack }: { onBack: () => void }) {
                 align="right"
                 title="Suggest use cases"
                 description="Generates three AI/delivery use-case ideas from the captured pains and adds them as new cards on the board."
-                prompt={() => buildSuggestPrompt(cards)}
+                prompt={() => buildSuggestPrompt(cards, { labelFn: resolveThemeLabel, themeIds: themes.map((t) => t.id) })}
               />
             </span>
             <button style={btn.ai(C.navy)} onClick={arrange}>Arrange by theme</button>
@@ -1413,6 +1622,8 @@ function Board({ onBack }: { onBack: () => void }) {
                 updateCard={updateCard}
                 duplicateCard={duplicateCard}
                 removeCard={removeCard}
+                themeOf={resolveTheme}
+                getCardAccent={getCardAccent}
               />
             ))}
           </div>
@@ -1473,8 +1684,9 @@ function Board({ onBack }: { onBack: () => void }) {
                     onChange={(e) => setTheme(e.target.value)}
                     style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "0 8px", fontSize: 13, color: C.navy, background: C.white, flexShrink: 0 }}
                   >
-                    {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                    {themes.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                   </select>
+                  <NewCategoryPopover onCreate={createCategory} />
                   <input
                     style={{ flex: "1 1 120px", minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }}
                     placeholder="Type a pain point or use case, then Enter"
@@ -1535,7 +1747,7 @@ function Board({ onBack }: { onBack: () => void }) {
                   align="right"
                   title="Refresh review"
                   description="Watches the cards on the board and generates three live insights — the strongest pattern, the biggest AI opportunity, and one gap to probe. Uses the model selected in the header."
-                  prompt={() => buildReviewPrompt(cards)}
+                  prompt={() => buildReviewPrompt(cards, resolveThemeLabel)}
                 />
               </div>
             </div>
@@ -1546,7 +1758,7 @@ function Board({ onBack }: { onBack: () => void }) {
             </div>
             <button style={{ ...btn.ghost, marginTop: 12 }} onClick={runReview} disabled={busy.review}>Refresh review</button>
             <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 8 }}>
-              {THEMES.map((t) => <span key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#3A4358" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: t.color }} /> {t.label}</span>)}
+              {themes.map((t) => <span key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#3A4358" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: t.color }} /> {t.label}</span>)}
             </div>
           </aside>
         </div>
@@ -1563,7 +1775,7 @@ function Board({ onBack }: { onBack: () => void }) {
         )}
       </div>
 
-      {showPack && <Pack boards={boards} activeId={activeId} onClose={() => setShowPack(false)} />}
+      {showPack && <Pack boards={boards} activeId={activeId} themes={themes} customThemes={extractCustomThemes(themes)} onClose={() => setShowPack(false)} />}
       {showCompare && (
         <CompareModal
           results={compareResults}
@@ -1615,10 +1827,11 @@ function CompareModal({ results, loading, onClose }: {
   );
 }
 
-function BoardTakeawayContent({ cards, insight }: { cards: any[]; insight: string }) {
+function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insight: string; themes: Theme[] }) {
+  const knownIds = new Set(themes.map((t) => t.id));
   return (
     <>
-      {THEMES.map((t) => {
+      {themes.map((t) => {
         const items = cards.filter((c: any) => c.theme === t.id);
         if (!items.length) return null;
         return (
@@ -1629,7 +1842,7 @@ function BoardTakeawayContent({ cards, insight }: { cards: any[]; insight: strin
         );
       })}
       {(() => {
-        const items = cards.filter((c: any) => !c.theme);
+        const items = cards.filter((c: any) => !c.theme || !knownIds.has(c.theme));
         if (!items.length) return null;
         return (
           <div key="uncategorised" style={{ marginTop: 18 }}>
@@ -1648,11 +1861,11 @@ function BoardTakeawayContent({ cards, insight }: { cards: any[]; insight: strin
   );
 }
 
-function Pack({ boards, activeId, onClose }: { boards: BoardData[]; activeId: string; onClose: () => void }) {
+function Pack({ boards, activeId, themes, customThemes, onClose }: { boards: BoardData[]; activeId: string; themes: Theme[]; customThemes: Theme[]; onClose: () => void }) {
   const [includeAll, setIncludeAll] = useState(false);
   const boardsToShow = includeAll ? boards : boards.filter((b) => b.id === activeId);
   const exportJSON = () => {
-    const blob = new Blob([JSON.stringify({ boards, activeId }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ boards, activeId, customThemes }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = "mufg-workshop-session.json"; a.click();
   };
@@ -1667,7 +1880,7 @@ function Pack({ boards, activeId, onClose }: { boards: BoardData[]; activeId: st
             {(includeAll || boards.length > 1) && (
               <h3 style={{ fontFamily: display, color: C.navy, margin: "0 0 8px", fontSize: 18 }}>{board.name}</h3>
             )}
-            <BoardTakeawayContent cards={board.cards} insight={board.insight} />
+            <BoardTakeawayContent cards={board.cards} insight={board.insight} themes={themes} />
           </div>
         ))}
         <div className="no-print" style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap", alignItems: "center" }}>

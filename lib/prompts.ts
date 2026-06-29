@@ -4,6 +4,8 @@ export type PromptPayload = { system: string; content: string };
 
 export type CaptureCard = { id: string; text: string; theme?: string | null };
 
+export type ThemeLabelFn = (id: string | null | undefined) => string;
+
 export type ToolResearchInput = {
   name: string;
   cat: string;
@@ -26,20 +28,20 @@ const RESEARCH_SYSTEM =
   '"pricing" (licensing model and rough price bands), "marketChanges" (recent launches, acquisitions, competitive moves). ' +
   "Each value: 2–4 concise sentences citing what you found. If uncertain, say so.";
 
-function formatCardLines(cards: CaptureCard[]): string {
-  return cards.map((c) => `[${themeLabel(c.theme)}] ${c.text}`).join("\n");
+function formatCardLines(cards: CaptureCard[], labelFn: ThemeLabelFn = themeLabel): string {
+  return cards.map((c) => `[${labelFn(c.theme)}] ${c.text}`).join("\n");
 }
 
-export function buildReviewPrompt(cards: CaptureCard[]): PromptPayload {
+export function buildReviewPrompt(cards: CaptureCard[], labelFn?: ThemeLabelFn): PromptPayload {
   return {
     system:
       "You are a senior delivery/PMO consultant observing a live MUFG discovery workshop. Given captured pain points across three themes, return 3 sharp insights as plain-text lines, each starting with '— '. Cover: the strongest emerging pattern, the single biggest AI opportunity, and one gap worth probing. No preamble, no headings.",
-    content: formatCardLines(cards),
+    content: formatCardLines(cards, labelFn),
   };
 }
 
-export function buildComparePrompt(cards: CaptureCard[]): PromptPayload {
-  return buildReviewPrompt(cards);
+export function buildComparePrompt(cards: CaptureCard[], labelFn?: ThemeLabelFn): PromptPayload {
+  return buildReviewPrompt(cards, labelFn);
 }
 
 export function buildLinkagesPrompt(cards: CaptureCard[]): PromptPayload {
@@ -51,11 +53,15 @@ export function buildLinkagesPrompt(cards: CaptureCard[]): PromptPayload {
   };
 }
 
-export function buildSuggestPrompt(cards: CaptureCard[]): PromptPayload {
-  const lines = formatCardLines(cards);
+export function buildSuggestPrompt(
+  cards: CaptureCard[],
+  opts?: { labelFn?: ThemeLabelFn; themeIds?: string[] }
+): PromptPayload {
+  const lines = formatCardLines(cards, opts?.labelFn);
+  const ids = opts?.themeIds?.length ? opts.themeIds : ["accelerate", "manual", "quality"];
   return {
     system:
-      'Return ONLY a JSON array of 3 objects, no prose. Each: {"theme": "accelerate"|"manual"|"quality", "text": "<concise AI/delivery use-case idea, <=12 words>"}. Base them on the captured pains.',
+      `Return ONLY a JSON array of 3 objects, no prose. Each: {"theme": "<one of: ${ids.join(", ")}>", "text": "<concise AI/delivery use-case idea, <=12 words>"}. Base them on the captured pains.`,
     content: lines || "No cards yet — suggest generic delivery AI use cases.",
   };
 }
