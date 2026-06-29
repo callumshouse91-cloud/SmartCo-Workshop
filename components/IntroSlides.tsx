@@ -128,36 +128,38 @@ function CountUp({ target, prefix = "£", suffix = "k" }: { target: number; pref
   return <span className="intro-count-up">{prefix}{val}{suffix}</span>;
 }
 
-const PHASE_TIMELINE_COLORS = [C.blue, C.mint, C.coral];
 const PHASE_JOURNEY_HEX_COLORS = [C.mint, C.yellow, C.coral];
 
 const VB_W = 1600;
 const VB_H = 900;
 const RAIL_Y = 450;
-const RAIL_X1 = 80;
-const RAIL_X2 = 1520;
+const RAIL_PAD = 56;
+const RAIL_X1 = RAIL_PAD;
+const RAIL_X2 = VB_W - RAIL_PAD;
+const RAIL_SPAN = RAIL_X2 - RAIL_X1;
 const HEX_R = 56;
-const HEX_CX = [0.12, 0.46, 0.79].map((p) => p * VB_W);
+const HEX_CX = [0, 1, 2].map((i) => RAIL_X1 + (RAIL_SPAN * (i * 2 + 1)) / 6);
 const HEX_DELAYS = [0.55, 1.6, 2.7];
+const LEADER_ABOVE_Y = 205;
+const LEADER_BELOW_Y = 695;
 
 type CalloutSide = "above" | "below";
 
 type CalloutSlot = {
-  cxPct: number;
   side: CalloutSide;
   phase: number;
   item: number;
   delay: number;
 };
 
+/** Three above, three below — each pair anchored to its phase node at even thirds. */
 const CALLOUT_SLOTS: CalloutSlot[] = [
-  { cxPct: 16, side: "above", phase: 0, item: 1, delay: 1.1 },
-  { cxPct: 48, side: "above", phase: 1, item: 0, delay: 1.95 },
-  { cxPct: 80, side: "above", phase: 2, item: 1, delay: 3.3 },
-  { cxPct: 7, side: "below", phase: 0, item: 0, delay: 0.85 },
-  { cxPct: 34, side: "below", phase: 1, item: 1, delay: 2.2 },
-  { cxPct: 60, side: "below", phase: 2, item: 0, delay: 3.05 },
-  { cxPct: 85, side: "below", phase: 2, item: 2, delay: 3.55 },
+  { side: "above", phase: 0, item: 1, delay: 1.1 },
+  { side: "above", phase: 1, item: 0, delay: 1.95 },
+  { side: "above", phase: 2, item: 1, delay: 3.3 },
+  { side: "below", phase: 0, item: 0, delay: 0.85 },
+  { side: "below", phase: 1, item: 1, delay: 2.2 },
+  { side: "below", phase: 2, item: 0, delay: 3.05 },
 ];
 
 function hexPath(r: number): string {
@@ -176,7 +178,11 @@ function parseCalloutItem(item: string) {
 }
 
 function leaderEndY(side: CalloutSide) {
-  return side === "above" ? 205 : 695;
+  return side === "above" ? LEADER_ABOVE_Y : LEADER_BELOW_Y;
+}
+
+function phaseCenterPct(phase: number) {
+  return (HEX_CX[phase] / VB_W) * 100;
 }
 
 export function PhaseJourneySlide({
@@ -188,10 +194,19 @@ export function PhaseJourneySlide({
   title: string;
   phases: PhaseBlock[];
 }) {
+  const phase2Extra = phases[2]?.items[2] ? parseCalloutItem(phases[2].items[2]) : null;
+
   const callouts = CALLOUT_SLOTS.map((slot) => {
     const raw = phases[slot.phase]?.items[slot.item] ?? "";
     const { heading, body } = parseCalloutItem(raw);
-    return { ...slot, heading, body };
+    return {
+      ...slot,
+      heading,
+      body,
+      cxPct: phaseCenterPct(slot.phase),
+      extra:
+        slot.phase === 2 && slot.side === "below" && slot.item === 0 ? phase2Extra : null,
+    };
   });
 
   return (
@@ -206,44 +221,35 @@ export function PhaseJourneySlide({
           role="img"
           aria-label="Three-phase transformation journey with callouts on a horizontal rail"
         >
-          {/* Grey rail */}
           <rect
             x={RAIL_X1}
             y={RAIL_Y - 7}
-            width={RAIL_X2 - RAIL_X1}
+            width={RAIL_SPAN}
             height={14}
             rx={7}
             fill="#EEF0F4"
             className="phase-journey-rail"
           />
 
-          {/* Leader lines + rail dots (behind phase hexagons) */}
           {callouts.map((c, i) => {
-            const x = (c.cxPct / 100) * VB_W;
+            const x = HEX_CX[c.phase];
             const y2 = leaderEndY(c.side);
             return (
-              <g key={`leader-${i}`}>
-                <line
-                  x1={x}
-                  y1={RAIL_Y}
-                  x2={x}
-                  y2={y2}
-                  stroke={C.blue}
-                  strokeWidth={1.5}
-                  pathLength={100}
-                  className="phase-journey-leader"
-                  style={{ animationDelay: `${c.delay}s` }}
-                />
-                <g transform={`translate(${x}, ${RAIL_Y})`}>
-                  <g className="phase-journey-dot" style={{ animationDelay: `${c.delay}s` }}>
-                    <path d={hexPath(7)} fill={C.blue} />
-                  </g>
-                </g>
-              </g>
+              <line
+                key={`leader-${i}`}
+                x1={x}
+                y1={RAIL_Y}
+                x2={x}
+                y2={y2}
+                stroke={C.blue}
+                strokeWidth={1.5}
+                pathLength={100}
+                className="phase-journey-leader"
+                style={{ animationDelay: `${c.delay}s` }}
+              />
             );
           })}
 
-          {/* Phase hexagons */}
           {phases.slice(0, 3).map((phase, i) => (
             <g key={phase.title} transform={`translate(${HEX_CX[i]}, ${RAIL_Y})`}>
               <g className="phase-journey-hex" style={{ animationDelay: `${HEX_DELAYS[i]}s` }}>
@@ -280,41 +286,21 @@ export function PhaseJourneySlide({
             >
               <div className="phase-journey-callout-heading">{c.heading}</div>
               {c.body ? <div className="phase-journey-callout-body">{c.body}</div> : null}
+              {c.extra ? (
+                <>
+                  <div className="phase-journey-callout-heading phase-journey-callout-heading--secondary">
+                    {c.extra.heading}
+                  </div>
+                  {c.extra.body ? (
+                    <div className="phase-journey-callout-body">{c.extra.body}</div>
+                  ) : null}
+                </>
+              ) : null}
             </div>
           ))}
         </div>
       </div>
     </div>
-  );
-}
-
-export function PhaseTimelineSlide({
-  eyebrow, title, phases,
-}: {
-  eyebrow: string;
-  title: string;
-  phases: { title: string; label: string }[];
-}) {
-  return (
-    <SlideFit className="intro-slide-has-corner">
-      <SlideCornerAccent />
-      <Eyebrow>{eyebrow}</Eyebrow>
-      <SlideTitle>{title}</SlideTitle>
-      <div style={{ position: "relative", width: "100%", maxWidth: 900, margin: "clamp(12px, 2vh, 20px) auto 0" }}>
-        <div className="intro-phase-timeline-rail" aria-hidden />
-        <div className="intro-phase-timeline">
-          {phases.map((p, i) => (
-            <div key={p.title} className="intro-phase-node" style={{ animationDelay: `${0.2 + i * 0.15}s` }}>
-              <div className="intro-phase-dot" style={{ background: PHASE_TIMELINE_COLORS[i] ?? C.blue }}>
-                {i + 1}
-              </div>
-              <div className="intro-phase-label">{p.title}</div>
-              <div className="intro-phase-caption">{p.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </SlideFit>
   );
 }
 
@@ -382,19 +368,76 @@ const WHO_WE_ARE_CLIENTS = [
 
 const WHO_VB_W = 1250;
 const WHO_VB_H = 720;
-const WHO_CX = 620;
-const WHO_CY = 360;
+const WHO_CX = 625;
+const WHO_CY = 368;
 const WHO_R = 232;
-const WHO_HEX_R = 58;
+const WHO_STROKE = 40;
+const WHO_ARC_SPAN = 108;
+const WHO_ARC_GAP = 12;
+const WHO_RING_INNER = WHO_R - WHO_STROKE / 2;
+const WHO_HEX_MARGIN = 20;
+
+const WHO_ARC_SEGMENTS = [
+  { label: "ADVISORY", centerDeg: 0, color: C.coral, delay: "0.3s", arrowDelay: "0.45s" },
+  { label: "DELIVERY", centerDeg: 120, color: C.yellow, delay: "0.7s", arrowDelay: "0.85s" },
+  { label: "OPTIMISATION", centerDeg: 240, color: C.mint, delay: "1.1s", arrowDelay: "1.25s", long: true },
+] as const;
+
+/** Degrees clockwise from 12 o'clock. */
+function whoRingPoint(cx: number, cy: number, r: number, degFromTop: number) {
+  const rad = (degFromTop * Math.PI) / 180;
+  return { x: cx + r * Math.sin(rad), y: cy - r * Math.cos(rad) };
+}
+
+function whoArcPath(cx: number, cy: number, r: number, centerDeg: number) {
+  const half = WHO_ARC_SPAN / 2;
+  const start = centerDeg - half;
+  const end = centerDeg + half;
+  const p1 = whoRingPoint(cx, cy, r, start);
+  const p2 = whoRingPoint(cx, cy, r, end);
+  const large = WHO_ARC_SPAN > 180 ? 1 : 0;
+  return `M ${p1.x.toFixed(1)} ${p1.y.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+}
+
+function honeycombOffsets(hexR: number) {
+  const dx = Math.sqrt(3) * hexR;
+  const dy = 1.5 * hexR;
+  return [
+    { ox: -dx / 2, oy: -dy / 2 },
+    { ox: dx / 2, oy: -dy / 2 },
+    { ox: -dx, oy: dy / 2 },
+    { ox: 0, oy: dy / 2 },
+    { ox: dx, oy: dy / 2 },
+  ];
+}
+
+function maxHoneycombRadius(hexR: number) {
+  return Math.max(...honeycombOffsets(hexR).map((p) => Math.hypot(p.ox, p.oy))) + hexR;
+}
+
+function fitHoneycombRadius() {
+  const limit = WHO_RING_INNER - WHO_HEX_MARGIN;
+  let lo = 40;
+  let hi = 80;
+  while (hi - lo > 0.5) {
+    const mid = (lo + hi) / 2;
+    if (maxHoneycombRadius(mid) <= limit) lo = mid;
+    else hi = mid;
+  }
+  return Math.floor(lo);
+}
+
+const WHO_HEX_R = fitHoneycombRadius();
+const WHO_HONEYCOMB = honeycombOffsets(WHO_HEX_R);
 
 type PracticeKey = "ai" | "cloud" | "cyber" | "apps" | "data";
 
-const PRACTICE_LAYOUT: { key: PracticeKey; match: (tag: string) => boolean; ox: number; oy: number; delay: number }[] = [
-  { key: "ai", match: (t) => t === "AI", ox: -62, oy: -44, delay: 1.28 },
-  { key: "cloud", match: (t) => t.includes("Cloud"), ox: 62, oy: -44, delay: 1.43 },
-  { key: "cyber", match: (t) => t.includes("Cyber"), ox: -124, oy: 46, delay: 1.58 },
-  { key: "apps", match: (t) => t.includes("Apps"), ox: 0, oy: 46, delay: 1.73 },
-  { key: "data", match: (t) => t.includes("Data"), ox: 124, oy: 46, delay: 1.88 },
+const PRACTICE_LAYOUT: { key: PracticeKey; match: (tag: string) => boolean; delay: number }[] = [
+  { key: "ai", match: (t) => t === "AI", delay: 1.28 },
+  { key: "cloud", match: (t) => t.includes("Cloud"), delay: 1.43 },
+  { key: "cyber", match: (t) => t.includes("Cyber"), delay: 1.58 },
+  { key: "apps", match: (t) => t.includes("Apps"), delay: 1.73 },
+  { key: "data", match: (t) => t.includes("Data"), delay: 1.88 },
 ];
 
 const WHO_CALLOUT_SLOTS = [
@@ -505,13 +548,15 @@ export function WhoWeAreSlide({
   cards: CapabilityCard[];
   closing: string;
 }) {
-  const practices = PRACTICE_LAYOUT.map((slot) => {
+  const practices = PRACTICE_LAYOUT.map((slot, i) => {
     const label = tags.find(slot.match) ?? "";
-    return { ...slot, label };
+    const cell = WHO_HONEYCOMB[i];
+    return { ...slot, label, ox: cell.ox, oy: cell.oy };
   });
 
   return (
-    <div className="who-we-are-slide">
+    <div className="who-we-are-slide intro-slide-has-corner">
+      <SlideCornerAccent />
       <Eyebrow>{eyebrow}</Eyebrow>
       <SlideTitle className="who-we-are-title">{title}</SlideTitle>
 
@@ -524,87 +569,64 @@ export function WhoWeAreSlide({
             role="img"
             aria-label="Advisory, Delivery and Optimisation cycle with five core practices"
           >
-            <defs>
-              <path id="who-arc-advisory-text" d="M 458 218 A 232 232 0 0 1 782 218" fill="none" />
-              <path id="who-arc-delivery-text" d="M 822 295 A 232 232 0 0 1 668 575" fill="none" />
-              <path id="who-arc-optim-text" d="M 568 575 A 232 232 0 0 1 418 295" fill="none" />
-            </defs>
+            {WHO_ARC_SEGMENTS.map((seg) => (
+              <path
+                key={seg.label}
+                d={whoArcPath(WHO_CX, WHO_CY, WHO_R, seg.centerDeg)}
+                fill="none"
+                stroke={seg.color}
+                strokeWidth={WHO_STROKE}
+                strokeLinecap="round"
+                pathLength={100}
+                className="who-ring-arc"
+                style={{ animationDelay: seg.delay }}
+              />
+            ))}
 
-            <path
-              d="M 442 211 A 232 232 0 0 1 798 211"
-              fill="none"
-              stroke={C.coral}
-              strokeWidth={40}
-              strokeLinecap="round"
-              pathLength={100}
-              className="who-ring-arc"
-              style={{ animationDelay: "0.3s" }}
-            />
-            <path
-              d="M 838 281 A 232 232 0 0 1 660 589"
-              fill="none"
-              stroke={C.yellow}
-              strokeWidth={40}
-              strokeLinecap="round"
-              pathLength={100}
-              className="who-ring-arc"
-              style={{ animationDelay: "0.7s" }}
-            />
-            <path
-              d="M 580 589 A 232 232 0 0 1 402 281"
-              fill="none"
-              stroke={C.mint}
-              strokeWidth={40}
-              strokeLinecap="round"
-              pathLength={100}
-              className="who-ring-arc"
-              style={{ animationDelay: "1.1s" }}
-            />
+            {WHO_ARC_SEGMENTS.map((seg) => {
+              const endDeg = seg.centerDeg + WHO_ARC_SPAN / 2;
+              const tip = whoRingPoint(WHO_CX, WHO_CY, WHO_R, endDeg);
+              return (
+                <g key={`arrow-${seg.label}`} transform={`translate(${tip.x.toFixed(1)},${tip.y.toFixed(1)}) rotate(${endDeg + 90})`}>
+                  <g className="who-ring-arrow" style={{ animationDelay: seg.arrowDelay }}>
+                    <polygon points="0,-9 16,0 0,9" fill={seg.color} />
+                  </g>
+                </g>
+              );
+            })}
 
-            <g transform="translate(798,211) rotate(50)">
-              <g className="who-ring-arrow" style={{ animationDelay: "0.45s" }}>
-                <polygon points="0,-9 16,0 0,9" fill={C.coral} />
-              </g>
-            </g>
-            <g transform="translate(660,589) rotate(170)">
-              <g className="who-ring-arrow" style={{ animationDelay: "0.85s" }}>
-                <polygon points="0,-9 16,0 0,9" fill={C.yellow} />
-              </g>
-            </g>
-            <g transform="translate(402,281) rotate(-70)">
-              <g className="who-ring-arrow" style={{ animationDelay: "1.25s" }}>
-                <polygon points="0,-9 16,0 0,9" fill={C.mint} />
-              </g>
-            </g>
-
-            <text className="who-ring-label" fill={C.white} fontFamily={display} fontWeight={800}>
-              <textPath href="#who-arc-advisory-text" startOffset="50%" textAnchor="middle">
-                ADVISORY
-              </textPath>
-            </text>
-            <text className="who-ring-label" fill={C.white} fontFamily={display} fontWeight={800}>
-              <textPath href="#who-arc-delivery-text" startOffset="50%" textAnchor="middle">
-                DELIVERY
-              </textPath>
-            </text>
-            <text className="who-ring-label who-ring-label--long" fill={C.white} fontFamily={display} fontWeight={800}>
-              <textPath href="#who-arc-optim-text" startOffset="50%" textAnchor="middle">
-                OPTIMISATION
-              </textPath>
-            </text>
+            {WHO_ARC_SEGMENTS.map((seg) => {
+              const labelPt = whoRingPoint(WHO_CX, WHO_CY, WHO_R, seg.centerDeg);
+              return (
+                <text
+                  key={`label-${seg.label}`}
+                  x={labelPt.x}
+                  y={labelPt.y}
+                  className={`who-ring-label${"long" in seg && seg.long ? " who-ring-label--long" : ""}`}
+                  fill={C.white}
+                  fontFamily={display}
+                  fontWeight={800}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                >
+                  {seg.label}
+                </text>
+              );
+            })}
 
             {practices.map((p) => {
               const hx = WHO_CX + p.ox;
               const hy = WHO_CY + p.oy;
-              const innerW = Math.sqrt(3) * WHO_HEX_R * 1.05;
+              const innerW = Math.sqrt(3) * WHO_HEX_R * 0.92;
+              const labelH = WHO_HEX_R * 0.72;
               return (
-                <g key={p.key} transform={`translate(${hx}, ${hy})`}>
+                <g key={p.key} transform={`translate(${hx.toFixed(1)}, ${hy.toFixed(1)})`}>
                   <g className="who-practice-hex" style={{ animationDelay: `${p.delay}s` }}>
                     <polygon points={whoHexPolygon(0, 0, WHO_HEX_R)} fill={C.blue} />
-                    <g transform="translate(0,-16)">
+                    <g transform={`translate(0,${(-WHO_HEX_R * 0.28).toFixed(1)})`}>
                       <PracticeIcon kind={p.key} />
                     </g>
-                    <foreignObject x={-innerW / 2} y={6} width={innerW} height={WHO_HEX_R * 0.88} xmlns="http://www.w3.org/1999/xhtml">
+                    <foreignObject x={-innerW / 2} y={WHO_HEX_R * 0.08} width={innerW} height={labelH} xmlns="http://www.w3.org/1999/xhtml">
                       <div className="who-hex-label">{p.label}</div>
                     </foreignObject>
                   </g>
@@ -661,50 +683,78 @@ export function WhoWeAreSlide({
 
 export function AIContainmentSlide({ eyebrow, title, sub }: { eyebrow: string; title: string; sub: string }) {
   return (
-    <SlideFit wide className="intro-slide-has-corner">
+    <SlideFit wide className="intro-slide-has-corner intro-slide-ai-containment">
       <SlideCornerAccent />
       <Eyebrow>{eyebrow}</Eyebrow>
-      <SlideTitle>{title}</SlideTitle>
-      <p className="intro-enter intro-slide-body ai-perimeter-copy" style={{ animationDelay: "0.3s" }}>{sub}</p>
-      <div className="intro-enter ai-perimeter-stage" style={{ animationDelay: "0.38s" }}>
-        <AIContainment compact />
+      <div className="ai-containment-layout">
+        <div className="ai-containment-copy-col">
+          <SlideTitle>{title}</SlideTitle>
+          <p className="intro-enter intro-slide-body ai-perimeter-copy" style={{ animationDelay: "0.3s" }}>{sub}</p>
+        </div>
+        <div className="intro-enter ai-perimeter-stage" style={{ animationDelay: "0.38s" }}>
+          <AIContainment compact />
+        </div>
       </div>
     </SlideFit>
   );
 }
 
+function ParallelogramMarker({ variant = "on-blue" }: { variant?: "on-blue" | "on-white" }) {
+  const primary = variant === "on-blue" ? "rgba(255,255,255,0.45)" : C.blue;
+  const secondary = variant === "on-blue" ? "rgba(255,255,255,0.28)" : C.mint;
+  return (
+    <svg className="context-challenge-marker" viewBox="0 0 24 32" width={20} height={26} aria-hidden>
+      <polygon points="8,0 16,0 12,32 4,32" fill={primary} />
+      <polygon points="16,0 24,0 20,32 12,32" fill={secondary} />
+    </svg>
+  );
+}
+
 export function ContextSlide({
-  eyebrow, title, intro, challenges, focusIntro, focusItems,
+  eyebrow, title, intro, challenges, focusHeading, focusLead, focusItems,
 }: {
   eyebrow: string;
   title: string;
   intro: string;
   challenges: string[];
-  focusIntro: string;
+  focusHeading: string;
+  focusLead: string;
   focusItems: string[];
 }) {
   return (
-    <SlideFit dense wide className="intro-slide-has-corner">
-      <SlideCornerAccent />
-      <Eyebrow>{eyebrow}</Eyebrow>
-      <SlideTitle>{title}</SlideTitle>
-      <p {...stagger(0, 0.28)} className="intro-slide-body intro-slide-intro">{intro}</p>
-      <ul className="intro-hex-list intro-hex-list--compact">
-        {challenges.map((c, i) => (
-          <HexBulletRow key={i} index={i} delay={0.36 + i * 0.08}>
-            <div className="intro-hex-body">{c}</div>
-          </HexBulletRow>
-        ))}
-      </ul>
-      <p {...stagger(challenges.length + 1, 0.36)} className="intro-focus-intro">{focusIntro}</p>
-      <ul className="intro-hex-list intro-hex-list--compact">
-        {focusItems.map((item, i) => (
-          <HexBulletRow key={i} index={i + challenges.length} delay={0.4 + challenges.length * 0.08 + i * 0.08}>
-            <div className="intro-hex-body">{item}</div>
-          </HexBulletRow>
-        ))}
-      </ul>
-    </SlideFit>
+    <div className="intro-slide-context">
+      <div className="context-split">
+        <div className="context-split-left intro-slide-has-corner">
+          <SlideCornerAccent />
+          <Eyebrow>{eyebrow}</Eyebrow>
+          <SlideTitle>{title}</SlideTitle>
+          <p {...stagger(0, 0.28)} className="intro-slide-body intro-slide-intro">{intro}</p>
+          <h3 {...stagger(1, 0.34)} className="context-focus-heading">{focusHeading}</h3>
+          <p {...stagger(2, 0.36)} className="context-focus-lead">{focusLead}</p>
+          <ul className="context-focus-list">
+            {focusItems.map((item, i) => (
+              <li key={i} {...stagger(i + 3, 0.38)} className="context-focus-item intro-stagger">
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="context-split-right" aria-label="Key challenges">
+          <ul className="context-challenge-list">
+            {challenges.map((c, i) => (
+              <li
+                key={i}
+                className="context-challenge-item intro-stagger"
+                style={{ animationDelay: `${0.32 + i * 0.08}s` }}
+              >
+                <ParallelogramMarker />
+                <p className="context-challenge-text">{c}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -746,7 +796,7 @@ export function EWhiteboardSlide({
 }
 
 export function TrackRecordSlide({
-  eyebrow, title, engagements, signalBody,
+  eyebrow, title, engagements, signalTitle, signalBody,
 }: {
   eyebrow: string;
   title: string;
@@ -758,31 +808,42 @@ export function TrackRecordSlide({
     <SlideFit dense wide className="intro-slide-track">
       <Eyebrow>{eyebrow}</Eyebrow>
       <SlideTitle>{title}</SlideTitle>
-      <div className="intro-track-table-wrap">
-        <table className="intro-track-table">
-          <thead className="intro-stagger" style={{ animationDelay: "0.3s" }}>
-            <tr>
-              <th>Sector</th>
-              <th>What we did</th>
-              <th>Engagement</th>
-              <th>Outcome</th>
-            </tr>
-          </thead>
-          <tbody>
-            {engagements.map((e, i) => (
-              <tr key={i} className="intro-stagger" style={{ animationDelay: `${0.38 + i * 0.08}s` }}>
-                <td>{e.sector}</td>
-                <td>{e.doing}</td>
-                <td>{e.length}</td>
-                <td>{e.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="intro-track-cards">
+        {engagements.map((e, i) => (
+          <article
+            key={i}
+            className="intro-track-card intro-stagger"
+            style={{ animationDelay: `${0.3 + i * 0.07}s` }}
+          >
+            <svg className="intro-track-card-accent" viewBox="0 0 28 40" aria-hidden>
+              <polygon points="10,0 20,0 16,40 6,40" fill={C.blue} opacity="0.18" />
+              <polygon points="20,0 28,0 24,40 14,40" fill={C.mint} opacity="0.22" />
+            </svg>
+            <span className="intro-track-sector">{e.sector}</span>
+            <div className="intro-track-field">
+              <span className="intro-track-label">What we did</span>
+              <p className="intro-track-value">{e.doing}</p>
+            </div>
+            <div className="intro-track-field">
+              <span className="intro-track-label">Engagement</span>
+              <p className="intro-track-value">{e.length}</p>
+            </div>
+            <div className="intro-track-field intro-track-field--outcome">
+              <span className="intro-track-label">Outcome</span>
+              <p className="intro-track-outcome">{e.value}</p>
+            </div>
+          </article>
+        ))}
       </div>
-      <div {...stagger(engagements.length + 1, 0.42)} className="intro-signal-strip">
+      <div {...stagger(engagements.length + 1, 0.42)} className="intro-signal-strip intro-signal-strip--anchor">
         <div className="intro-signal-title">
-          THE SIGNAL · <CountUp target={400} />
+          {signalTitle.includes("£400") ? (
+            <>
+              THE SIGNAL · <CountUp target={400} />
+            </>
+          ) : (
+            signalTitle
+          )}
         </div>
         <div className="intro-signal-body">{signalBody}</div>
       </div>
@@ -860,8 +921,6 @@ export function renderDeckSlide(s: DeckSlide, onEnter: () => void, heroTitle?: R
       return <AIContainmentSlide {...s} />;
     case "context":
       return <ContextSlide {...s} />;
-    case "phase-timeline":
-      return <PhaseTimelineSlide {...s} />;
     case "phase-journey":
       return <PhaseJourneyDeckSlide {...s} />;
     case "ewhiteboard":

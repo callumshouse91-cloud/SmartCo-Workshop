@@ -48,14 +48,9 @@ export type DeckSlide =
       title: string;
       intro: string;
       challenges: string[];
-      focusIntro: string;
+      focusHeading: string;
+      focusLead: string;
       focusItems: string[];
-    }
-  | {
-      kind: "phase-timeline";
-      eyebrow: string;
-      title: string;
-      phases: { title: string; label: string }[];
     }
   | {
       kind: "phase-journey";
@@ -221,7 +216,8 @@ export const DECK: DeckSlide[] = [
       "Early AI adoption underway, but not yet joined up or turning delivery data into governance-grade insight.",
       "Constrained environment and long enablement cycles slowing the pace of change.",
     ],
-    focusIntro: "Implication for workshop focus — Given the breadth of challenges, the workshop will focus on:",
+    focusHeading: "Implication for workshop focus",
+    focusLead: "Given the breadth of challenges, the workshop will focus on:",
     focusItems: [
       "Validating and refining key current-state challenges.",
       "Defining target outcomes and what \"good\" looks like across priority areas.",
@@ -230,41 +226,10 @@ export const DECK: DeckSlide[] = [
   },
 
   {
-    kind: "phase-timeline",
-    eyebrow: "AI ADOPTION & TRANSFORMATION APPROACH",
-    title: "Three phases to build with you",
-    phases: TRANSFORMATION_PHASES.map((p) => ({ title: p.title, label: p.label })),
-  },
-
-  {
     kind: "phase-journey",
     eyebrow: "AI ADOPTION & TRANSFORMATION APPROACH",
     title: "AI Adoption & Transformation Approach",
     phases: TRANSFORMATION_PHASES,
-  },
-
-  {
-    kind: "ewhiteboard",
-    eyebrow: "DISCOVERY JOURNEY",
-    title: "E-Whiteboard Focus Areas",
-    areas: [
-      {
-        title: "Status Reporting & PMO Consolidation",
-        level: "Primary",
-        desc: "High manual effort in reporting and aggregation across projects, with significant time spent producing and consolidating updates (e.g. PSRs, portfolio reporting).",
-      },
-      {
-        title: "Governance & Project Lifecycle Processes",
-        level: "Primary",
-        desc: "Inefficiencies across approvals, workflows, and lifecycle artefacts (e.g. Terms of Reference), creating friction and slowing delivery.",
-      },
-      {
-        title: "Cross-Project Coordination & Ownership",
-        level: "Secondary – time permitting",
-        desc: "Fragmentation across teams and lack of end-to-end ownership, impacting coordination and delivery consistency.",
-      },
-    ],
-    cta: "Enter workshop board",
   },
 
   {
@@ -333,6 +298,30 @@ export const DECK: DeckSlide[] = [
   },
 
   {
+    kind: "ewhiteboard",
+    eyebrow: "DISCOVERY JOURNEY",
+    title: "E-Whiteboard Focus Areas",
+    areas: [
+      {
+        title: "Status Reporting & PMO Consolidation",
+        level: "Primary",
+        desc: "High manual effort in reporting and aggregation across projects, with significant time spent producing and consolidating updates (e.g. PSRs, portfolio reporting).",
+      },
+      {
+        title: "Governance & Project Lifecycle Processes",
+        level: "Primary",
+        desc: "Inefficiencies across approvals, workflows, and lifecycle artefacts (e.g. Terms of Reference), creating friction and slowing delivery.",
+      },
+      {
+        title: "Cross-Project Coordination & Ownership",
+        level: "Secondary – time permitting",
+        desc: "Fragmentation across teams and lack of end-to-end ownership, impacting coordination and delivery consistency.",
+      },
+    ],
+    cta: "Enter workshop board",
+  },
+
+  {
     kind: "next-steps",
     title: "Next Steps",
     subtitle: "Thursday – Playback & Next Steps (14:00–16:00).",
@@ -381,3 +370,17 @@ export const DECK: DeckSlide[] = [
     copyright: "Copyright SmartCo 2026",
   },
 ];
+
+export function getClosingStartIndex(deck: DeckSlide[] = DECK): number {
+  return deck.findIndex((s) => !isImageSlide(s) && s.kind === "next-steps");
+}
+
+export function getWorkingDeck(deck: DeckSlide[] = DECK): DeckSlide[] {
+  const idx = getClosingStartIndex(deck);
+  return idx < 0 ? deck : deck.slice(0, idx);
+}
+
+export function getClosingDeck(deck: DeckSlide[] = DECK): DeckSlide[] {
+  const idx = getClosingStartIndex(deck);
+  return idx < 0 ? [] : deck.slice(idx);
+}

@@ -46,16 +46,12 @@ function BadgeLock({ size = 11 }: { size?: number }) {
 function ProviderChipHtml({
   left,
   top,
-  width,
-  height,
   name,
   logoSrc,
   logoAlt,
 }: {
   left: string;
   top: string;
-  width: string;
-  height: string;
   name: string;
   logoSrc: string;
   logoAlt: string;
@@ -63,7 +59,7 @@ function ProviderChipHtml({
   return (
     <div
       className="containment-provider-chip"
-      style={{ left, top, width, height }}
+      style={{ left, top, transform: "translate(0, -50%)" }}
     >
       <div className="containment-logo-slot">
         <img src={logoSrc} alt={logoAlt} />
@@ -80,15 +76,14 @@ function ProviderChipHtml({
 export function AIContainment({ compact }: { compact?: boolean }) {
   const w = compact ? 760 : 920;
   const h = compact ? 300 : 380;
-  const cx = w * 0.66;
+  const cx = w * 0.57;
   const cy = h * 0.52;
   const wallR = compact ? 86 : 108;
   const coreR = compact ? 40 : 50;
   const outerR = wallR + 16;
 
   const chipW = compact ? 132 : 148;
-  const chipH = compact ? 54 : 60;
-  const chipX = w * 0.02;
+  const chipX = w * 0.04;
   const geminiY = cy - 58;
   const gptY = cy + 58;
   const chipRight = chipX + chipW;
@@ -100,23 +95,22 @@ export function AIContainment({ compact }: { compact?: boolean }) {
 
   const blockedStart = { x: cx + coreR - 2, y: cy };
   const blockedEnd = { x: cx + wallR - 8, y: cy };
-  const badgeW = compact ? 178 : 196;
   const badgeH = compact ? 28 : 30;
-  const badgeX = cx - badgeW / 2;
-  const badgeY = cy - wallR - badgeH - 6;
+  const badgeY = cy - wallR - badgeH - 8;
+  const badgeFoW = compact ? 184 : 200;
 
   return (
-    <div className="intro-diagram-host ai-perimeter-diagram">
+    <div
+      className="intro-diagram-host ai-perimeter-diagram"
+      style={{ aspectRatio: `${w} / ${h}`, maxWidth: w }}
+    >
       <div className="ai-containment-scene">
         <svg
           viewBox={`0 0 ${w} ${h}`}
-          width="100%"
-          height="100%"
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="AI secure perimeter: Gemini and GPT feed web information in through the wall; your data stays inside and nothing leaves"
           className="ai-containment-svg"
-          style={{ display: "block", overflow: "visible" }}
         >
           <defs>
             <marker id="arrow-blue-in" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
@@ -164,10 +158,23 @@ export function AIContainment({ compact }: { compact?: boolean }) {
 
           <circle cx={cx} cy={cy} r={wallR} fill="none" stroke={C.coral} strokeWidth={compact ? 12 : 14} />
 
-          <g transform={`translate(${cx + wallR * 0.52}, ${cy - wallR * 0.72})`} aria-hidden>
-            <rect x={-6} y={3} width={12} height={10} rx={2} fill={C.coral} />
-            <path d="M -4 3 V 0.5 a 4 4 0 0 1 8 0 V 3" fill="none" stroke={C.coral} strokeWidth={2} />
-          </g>
+          <foreignObject
+            x={cx - badgeFoW / 2}
+            y={badgeY}
+            width={badgeFoW}
+            height={badgeH}
+            xmlns="http://www.w3.org/1999/xhtml"
+          >
+            <div className="containment-wall-badge-mount">
+              <div className="containment-wall-badge containment-wall-badge--inline">
+                <div className="containment-badge-logo">
+                  <img src={LOGOS.claude} alt="" />
+                </div>
+                <BadgeLock size={compact ? 10 : 11} />
+                <span className="containment-badge-label">Claude · the wall</span>
+              </div>
+            </div>
+          </foreignObject>
 
           <circle cx={cx} cy={cy} r={coreR} fill={C.white} stroke={C.coral} strokeWidth={2} />
           <PersonIcon x={cx} y={cy - 14} size={compact ? 20 : 24} />
@@ -219,36 +226,16 @@ export function AIContainment({ compact }: { compact?: boolean }) {
         </svg>
 
         <div className="ai-containment-html">
-          <div
-            className="containment-wall-badge"
-            style={{
-              left: pct(badgeX, w),
-              top: pct(badgeY, h),
-              width: pct(badgeW, w),
-              height: pct(badgeH, h),
-            }}
-          >
-            <div className="containment-badge-logo">
-              <img src={LOGOS.claude} alt="" />
-            </div>
-            <BadgeLock size={compact ? 10 : 11} />
-            <span className="containment-badge-label">Claude · the wall</span>
-          </div>
-
           <ProviderChipHtml
             left={pct(chipX, w)}
-            top={pct(geminiY - chipH / 2, h)}
-            width={pct(chipW, w)}
-            height={pct(chipH, h)}
+            top={pct(geminiY, h)}
             name="Gemini"
             logoSrc={LOGOS.gemini}
             logoAlt="Gemini"
           />
           <ProviderChipHtml
             left={pct(chipX, w)}
-            top={pct(gptY - chipH / 2, h)}
-            width={pct(chipW, w)}
-            height={pct(chipH, h)}
+            top={pct(gptY, h)}
             name="GPT"
             logoSrc={LOGOS.gpt}
             logoAlt="ChatGPT"

@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { C, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON } from "@/components/brand";
 import { AskButton } from "@/components/AskPanel";
+import { QuestionsNavLink } from "@/components/QuestionsNavLink";
 import { useRegisterAskContext } from "@/components/AskContext";
 import { InfoButton } from "@/components/InfoButton";
 import { buildToolingResearchPrompt } from "@/lib/prompts";
@@ -412,6 +413,7 @@ export default function ToolingPage() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <AskButton />
+          <QuestionsNavLink />
           <Link href="/" style={{ color: C.navy, textDecoration: "none", border: `1px solid ${C.border}`, padding: "9px 16px", borderRadius: 8, fontWeight: 600, fontSize: 13, background: C.white }}>← Board</Link>
         </div>
       </header>

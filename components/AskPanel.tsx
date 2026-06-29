@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { C, callAIResult, type AIProvider, type AISource } from "@/components/brand";
 import { useAsk } from "@/components/AskContext";
+import { useLoggedQuestions } from "@/components/LoggedQuestionsProvider";
 import { InfoButton } from "@/components/InfoButton";
 import { buildAskPrompt } from "@/lib/prompts";
 
@@ -87,13 +88,21 @@ export function AskButton() {
 
 export function AskPanel() {
   const { open, setOpen, pageContext } = useAsk();
+  const { addQuestion } = useLoggedQuestions();
   const [model, setModel] = useState<AskModel>("claude");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [includeContext, setIncludeContext] = useState(false);
+  const [logToast, setLogToast] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const logAsQuestion = (text: string) => {
+    if (!addQuestion(text, "agent")) return;
+    setLogToast(true);
+    setTimeout(() => setLogToast(false), 2200);
+  };
 
   useEffect(() => {
     if (open) {
@@ -238,7 +247,27 @@ export function AskPanel() {
           )}
         </div>
 
-        <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: 12, background: C.surface }}>
+        <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: 12, background: C.surface, position: "relative" }}>
+          {logToast && (
+            <div
+              role="status"
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
+                alignSelf: "center",
+                background: C.navy,
+                color: C.white,
+                fontSize: 12,
+                fontWeight: 700,
+                padding: "8px 14px",
+                borderRadius: 8,
+                boxShadow: "0 4px 14px rgba(10,22,40,.15)",
+              }}
+            >
+              Logged for Thursday review
+            </div>
+          )}
           {messages.length === 0 && !loading && (
             <p style={{ fontSize: 13, color: C.body, margin: 0, lineHeight: 1.5 }}>
               Ask anything about delivery, tooling, or the workshop. Choose Gemini or GPT for live web search.
@@ -250,19 +279,46 @@ export function AskPanel() {
               style={{
                 alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
                 maxWidth: "92%",
-                padding: "10px 12px",
-                borderRadius: 10,
-                background: msg.role === "user" ? C.navy : C.white,
-                color: msg.role === "user" ? C.white : C.navy,
-                border: msg.role === "assistant" ? `1px solid ${C.border}` : "none",
-                fontSize: 14,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: msg.role === "user" ? "flex-end" : "flex-start",
+                gap: 4,
               }}
             >
-              {msg.content}
-              {msg.role === "assistant" && <AnswerMeta msg={msg} />}
+              <div
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  background: msg.role === "user" ? C.navy : C.white,
+                  color: msg.role === "user" ? C.white : C.navy,
+                  border: msg.role === "assistant" ? `1px solid ${C.border}` : "none",
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {msg.content}
+                {msg.role === "assistant" && <AnswerMeta msg={msg} />}
+              </div>
+              {msg.role === "user" && (
+                <button
+                  type="button"
+                  onClick={() => logAsQuestion(msg.content)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: "2px 4px",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: C.blue,
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                  }}
+                >
+                  Log as question
+                </button>
+              )}
             </div>
           ))}
           {loading && (

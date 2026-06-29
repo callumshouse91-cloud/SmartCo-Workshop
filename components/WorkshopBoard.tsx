@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { C, THEMES, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider, type Theme } from "./brand";
 import { AskButton } from "@/components/AskPanel";
+import { QuestionsNavLink } from "@/components/QuestionsNavLink";
 import { useRegisterAskContext } from "@/components/AskContext";
 import { InfoButton } from "@/components/InfoButton";
 import {
@@ -13,7 +14,7 @@ import {
   buildSingleSuggestPrompt,
   buildClassifyPrompt,
 } from "@/lib/prompts";
-import { DECK, isImageSlide } from "./deck";
+import { DECK, getClosingDeck, getWorkingDeck, isImageSlide } from "./deck";
 import { renderDeckSlide } from "./IntroSlides";
 
 const CARD_W = 216;
@@ -166,7 +167,18 @@ type BoardData = {
   insight: string;
   zoom?: number;
   pan?: { x: number; y: number };
+  arrangeBy?: ArrangeByKey;
+  showLinkages?: boolean;
 };
+
+type ArrangeByKey = "category" | "dataPoint" | "impact" | "description";
+
+const ARRANGE_OPTIONS: { id: ArrangeByKey; label: string }[] = [
+  { id: "category", label: "Category" },
+  { id: "dataPoint", label: "Data point" },
+  { id: "impact", label: "Impact" },
+  { id: "description", label: "Description" },
+];
 
 type SessionPayload = {
   boards: BoardData[];
@@ -242,8 +254,57 @@ function normalizeCard(raw: any): WorkshopCard {
   };
 }
 
-function cardDescription(c: { description?: string; text?: string }) {
-  return (c.description ?? c.text ?? "").trim();
+function impactSortValue(c: WorkshopCard): string {
+  if (!c.impact?.type) return "\uffff";
+  if (c.impact.type === HOURS_IMPACT_TYPE && c.impact.hours != null) {
+    return `${c.impact.type}:${String(c.impact.hours).padStart(8, "0")}`;
+  }
+  return c.impact.type;
+}
+
+function columnIndex(theme: string | null, themes: Theme[]): number {
+  if (theme == null) return themes.length;
+  const i = themes.findIndex((t) => t.id === theme);
+  return i < 0 ? themes.length + 1 : i;
+}
+
+function layoutCards(cards: WorkshopCard[], sortBy: ArrangeByKey, themes: Theme[]): WorkshopCard[] {
+  const CARD_ROW_H = 122;
+  const CARD_Y0 = 80;
+  const groups = new Map<number, WorkshopCard[]>();
+  for (const card of cards) {
+    const col = columnIndex(card.theme, themes);
+    if (!groups.has(col)) groups.set(col, []);
+    groups.get(col)!.push(card);
+  }
+
+  const cmp = (a: WorkshopCard, b: WorkshopCard): number => {
+    switch (sortBy) {
+      case "dataPoint":
+        return (a.dataPoint || "").localeCompare(b.dataPoint || "", undefined, { sensitivity: "base" });
+      case "impact":
+        return impactSortValue(a).localeCompare(impactSortValue(b));
+      case "description":
+        return cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" });
+      case "category":
+      default:
+        return cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" });
+    }
+  };
+
+  const cols = [...groups.keys()].sort((a, b) => a - b);
+  const placed: WorkshopCard[] = [];
+  for (const col of cols) {
+    const colCards = [...(groups.get(col) ?? [])].sort(cmp);
+    colCards.forEach((card, row) => {
+      placed.push({
+        ...card,
+        x: SECTION_X0 + col * SECTION_COL_W,
+        y: CARD_Y0 + row * CARD_ROW_H,
+      });
+    });
+  }
+  return placed;
 }
 
 function impactLabel(impact: CardImpact | null | undefined): string {
@@ -259,6 +320,56 @@ function matchOption(value: string | undefined, options: string[]): string | nul
   if (exact) return exact;
   return options.find((o) => v.includes(o.toLowerCase()) || o.toLowerCase().includes(v)) ?? null;
 }
+
+async function fetchClassifyFields(
+  seed: string,
+  currentTheme: string | null,
+  opts: { dataPoints: string[]; impacts: string[]; themes: Theme[]; provider: AIProvider },
+): Promise<Partial<WorkshopCard>> {
+  const { system, content } = buildClassifyPrompt(seed, {
+    dataPoints: opts.dataPoints,
+    impacts: opts.impacts,
+    themeIds: opts.themes.map((t) => t.id),
+  });
+  try {
+    const { text, error } = await callAIResult(system, content, opts.provider);
+    if (error) throw new Error(error);
+    const parsed = parseJSON(text) as {
+      description?: string;
+      dataPoint?: string;
+      impact?: { type?: string; hours?: number };
+      theme?: string;
+    } | null;
+    if (!parsed) throw new Error("parse failed");
+    const patch: Partial<WorkshopCard> = {
+      description: typeof parsed.description === "string" && parsed.description.trim() ? parsed.description.trim() : seed,
+      dataPoint: matchOption(parsed.dataPoint, opts.dataPoints) ?? "N/A",
+    };
+    const impactType = matchOption(parsed.impact?.type, opts.impacts);
+    if (impactType) {
+      patch.impact =
+        impactType === HOURS_IMPACT_TYPE
+          ? { type: impactType, hours: typeof parsed.impact?.hours === "number" ? parsed.impact.hours : undefined }
+          : { type: impactType };
+    } else {
+      patch.impact = null;
+    }
+    if (currentTheme == null && parsed.theme && opts.themes.some((t) => t.id === parsed.theme)) {
+      patch.theme = parsed.theme;
+    }
+    return patch;
+  } catch {
+    return { description: seed, dataPoint: "N/A", impact: null };
+  }
+}
+
+type ComposerState = {
+  mode: "create" | "edit";
+  draft: WorkshopCard;
+  aiRan: boolean;
+};
+
+const COMPOSER_Z = 10002;
 
 const chipStyle: React.CSSProperties = {
   fontSize: 9,
@@ -367,6 +478,8 @@ const normalizeSession = (v: any): SessionPayload => {
       insight: typeof b.insight === "string" ? b.insight : "",
       zoom: typeof b.zoom === "number" ? b.zoom : 1,
       pan: b.pan && typeof b.pan.x === "number" ? b.pan : { x: 0, y: 0 },
+      arrangeBy: ARRANGE_OPTIONS.some((o) => o.id === b.arrangeBy) ? b.arrangeBy : undefined,
+      showLinkages: b.showLinkages === false ? false : undefined,
     }));
     const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
     return { boards, activeId, customThemes, customDataPoints: v.customDataPoints, customImpacts: v.customImpacts };
@@ -452,110 +565,449 @@ function parseSuggestCandidate(raw: string, apiError?: string): SuggestCandidate
 const findCardAtWorld = (cards: any[], wx: number, wy: number) =>
   cards.find((c) => wx >= c.x && wx <= c.x + cardW(c) && wy >= c.y && wy <= c.y + cardH(c));
 
-function OptionSelect({
+function PortaledSelect({
   label,
   value,
   options,
   onChange,
   onAddNew,
   optional,
+  optionColors,
 }: {
   label: string;
   value: string;
-  options: string[];
+  options: { value: string; label: string }[];
   onChange: (v: string) => void;
-  onAddNew: (v: string) => void;
+  onAddNew?: (v: string) => void;
   optional?: boolean;
+  optionColors?: Record<string, string>;
 }) {
+  const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
-  const list = options.includes(value) ? options : value ? [...options, value] : options;
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  if (adding) {
-    return (
-      <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
-        {label}
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          autoFocus
-          placeholder="New option"
-          onPointerDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const t = draft.trim();
-              if (t) { onAddNew(t); onChange(t); }
-              setAdding(false);
-              setDraft("");
-            }
-            if (e.key === "Escape") { setAdding(false); setDraft(""); }
-          }}
-          onBlur={() => { setAdding(false); setDraft(""); }}
-          style={{ ...fieldSelectStyle, fontSize: 11 }}
-        />
-      </label>
-    );
-  }
+  const list = options.some((o) => o.value === value)
+    ? options
+    : value ? [...options, { value, label: options.find((o) => o.value === value)?.label ?? value }] : options;
+  const active = list.find((o) => o.value === value);
+
+  const measurePos = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const menu = menuRef.current;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 200);
+    const gap = 4;
+    const menuH = menu?.offsetHeight ?? 160;
+    let top = r.bottom + gap;
+    if (top + menuH > window.innerHeight - 8) {
+      top = Math.max(8, r.top - menuH - gap);
+    }
+    return {
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      top,
+      width,
+    };
+  }, []);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setAdding(false);
+    setDraft("");
+    setPos(null);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 200);
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      top: Math.max(8, r.bottom + 4),
+      width,
+    });
+    setOpen(true);
+    setAdding(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const next = measurePos();
+    if (next) setPos(next);
+    if (adding) inputRef.current?.focus({ preventScroll: true });
+  }, [open, adding, list.length, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onReflow = () => { const next = measurePos(); if (next) setPos(next); };
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, adding, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close();
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open, close]);
+
+  const itemBtn = (selected: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    border: "none",
+    background: selected ? C.surface : "transparent",
+    color: C.navy,
+    fontSize: 12,
+    fontWeight: selected ? 700 : 600,
+    padding: "8px 10px",
+    cursor: "pointer",
+    textAlign: "left",
+    fontFamily: "inherit",
+  });
+
+  const menu = open && pos ? (
+    <div
+      ref={menuRef}
+      data-card-edit-menu
+      role="listbox"
+      style={{
+        position: "fixed",
+        left: pos.left,
+        top: pos.top,
+        width: pos.width,
+        zIndex: CARD_MENU_Z,
+        background: C.white,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        boxShadow: "0 10px 30px rgba(10,22,40,.14)",
+        overflow: "hidden",
+        maxHeight: 240,
+        overflowY: "auto",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {adding ? (
+        <div style={{ padding: 10 }}>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="New option"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const t = draft.trim();
+                if (t && onAddNew) { onAddNew(t); onChange(t); }
+                close();
+              }
+              if (e.key === "Escape") setAdding(false);
+            }}
+            style={{ ...fieldSelectStyle, fontSize: 11 }}
+          />
+        </div>
+      ) : (
+        <>
+          {optional && (
+            <button type="button" style={itemBtn(value === "")} onClick={() => { onChange(""); close(); }}>—</button>
+          )}
+          {list.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={o.value === value}
+              style={itemBtn(o.value === value)}
+              onClick={() => { onChange(o.value); close(); }}
+            >
+              {optionColors?.[o.value] && (
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: optionColors[o.value], flexShrink: 0 }} />
+              )}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
+            </button>
+          ))}
+          {onAddNew && (
+            <>
+              <div style={{ borderTop: `1px solid ${C.border}` }} />
+              <button type="button" style={{ ...itemBtn(false), color: C.blue, fontWeight: 700 }} onClick={() => setAdding(true)}>
+                + Add new…
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  ) : null;
 
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
-      {label}
-      <select
-        value={value}
-        onChange={(e) => {
-          if (e.target.value === ADD_NEW_OPTION) setAdding(true);
-          else onChange(e.target.value);
-        }}
-        onPointerDown={(e) => e.stopPropagation()}
-        style={fieldSelectStyle}
-      >
-        {optional && <option value="">—</option>}
-        {list.map((o) => <option key={o} value={o}>{o}</option>)}
-        <option value={ADD_NEW_OPTION}>+ Add new…</option>
-      </select>
-    </label>
+    <>
+      <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+        {label}
+        <button
+          ref={triggerRef}
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => (open ? close() : openMenu())}
+          style={{
+            ...fieldSelectStyle,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          {optionColors?.[value] && (
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: optionColors[value], flexShrink: 0 }} />
+          )}
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {active?.label ?? (optional && !value ? "—" : value || "Select")}
+          </span>
+          <span style={{ color: "#9AA3B2", fontSize: 9 }} aria-hidden>▾</span>
+        </button>
+      </label>
+      {typeof document !== "undefined" && menu ? createPortal(menu, document.body) : null}
+    </>
   );
 }
 
+function CardComposerModal({
+  mode,
+  draft,
+  classifying,
+  themes,
+  dataPoints,
+  impacts,
+  onDraftChange,
+  onThemeChange,
+  onAddDataPoint,
+  onAddImpact,
+  onDone,
+  onCancel,
+}: {
+  mode: "create" | "edit";
+  draft: WorkshopCard;
+  classifying: boolean;
+  themes: Theme[];
+  dataPoints: string[];
+  impacts: string[];
+  onDraftChange: (patch: Partial<WorkshopCard>) => void;
+  onThemeChange: (themeId: string | null) => void;
+  onAddDataPoint: (v: string) => void;
+  onAddImpact: (v: string) => void;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const accent = themes.find((t) => t.id === draft.theme)?.color ?? C.border;
+  const desc = cardDescription(draft);
+
+  const modal = (
+    <div
+      role="dialog"
+      aria-modal
+      aria-labelledby="card-composer-title"
+      style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: COMPOSER_Z, padding: 20 }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+    >
+      <div
+        style={{
+          background: C.white,
+          borderRadius: 16,
+          width: "min(560px, 96%)",
+          maxHeight: "90vh",
+          overflow: "auto",
+          boxShadow: "0 30px 80px rgba(10,22,40,.3)",
+          border: `1px solid ${C.border}`,
+          display: "flex",
+          flexDirection: "column",
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div style={{ padding: "20px 24px 0", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+            <h2 id="card-composer-title" style={{ fontFamily: display, color: C.navy, margin: 0, fontSize: 20 }}>
+              {mode === "create" ? "New card" : "Edit card"}
+            </h2>
+            {draft.ai && <span style={tag.ai}>AI</span>}
+          </div>
+          {classifying && (
+            <p style={{ margin: "8px 0 0", fontSize: 12, fontWeight: 600, color: C.blue }}>
+              AI is suggesting fields…
+            </p>
+          )}
+        </div>
+
+        <div style={{ padding: "16px 24px", flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div
+            style={{
+              borderRadius: 12,
+              border: `1px solid ${C.border}`,
+              borderTop: `4px solid ${accent}`,
+              padding: "12px 14px",
+              background: C.surface,
+              opacity: classifying ? 0.75 : 1,
+              transition: "opacity 0.2s",
+            }}
+          >
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+              Pain point / description
+              <textarea
+                value={desc}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  onDraftChange({ description: v, text: v });
+                }}
+                rows={4}
+                placeholder="Describe the pain point or friction…"
+                autoFocus
+                style={{
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  fontSize: 14,
+                  lineHeight: 1.4,
+                  color: C.navy,
+                  background: C.white,
+                  fontFamily: "inherit",
+                  resize: "vertical",
+                  minHeight: 88,
+                  outline: "none",
+                  boxSizing: "border-box",
+                  width: "100%",
+                }}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: classifying ? 0.6 : 1, transition: "opacity 0.2s" }}>
+            <PortaledSelect
+              label="Category"
+              value={draft.theme ?? ""}
+              options={themes.map((t) => ({ value: t.id, label: t.label }))}
+              optionColors={Object.fromEntries(themes.map((t) => [t.id, t.color]))}
+              onChange={(v) => onThemeChange(v || null)}
+            />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <PortaledSelect
+                label="Data point"
+                value={draft.dataPoint || "N/A"}
+                options={dataPoints.map((d) => ({ value: d, label: d }))}
+                onChange={(v) => onDraftChange({ dataPoint: v })}
+                onAddNew={onAddDataPoint}
+              />
+              <div>
+                <PortaledSelect
+                  label="Impact"
+                  optional
+                  value={draft.impact?.type ?? ""}
+                  options={impacts.map((d) => ({ value: d, label: d }))}
+                  onChange={(v) => {
+                    if (!v) onDraftChange({ impact: null });
+                    else onDraftChange({ impact: v === HOURS_IMPACT_TYPE ? { type: v, hours: draft.impact?.hours ?? 1 } : { type: v } });
+                  }}
+                  onAddNew={onAddImpact}
+                />
+                {draft.impact?.type === HOURS_IMPACT_TYPE && (
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={draft.impact.hours ?? ""}
+                    onChange={(e) => onDraftChange({ impact: { type: HOURS_IMPACT_TYPE, hours: Number(e.target.value) || 0 } })}
+                    placeholder="hrs/wk"
+                    style={{ ...fieldSelectStyle, marginTop: 4, width: 72 }}
+                  />
+                )}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+                Board X
+                <input
+                  type="number"
+                  value={Math.round(draft.x)}
+                  onChange={(e) => onDraftChange({ x: Number(e.target.value) || 0 })}
+                  style={fieldSelectStyle}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+                Board Y
+                <input
+                  type="number"
+                  value={Math.round(draft.y)}
+                  onChange={(e) => onDraftChange({ y: Number(e.target.value) || 0 })}
+                  style={fieldSelectStyle}
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: "14px 24px 20px",
+            borderTop: `1px solid ${C.border}`,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 10,
+            flexShrink: 0,
+            background: C.white,
+            borderRadius: "0 0 16px 16px",
+          }}
+        >
+          <button type="button" onClick={onCancel} style={btn.ghost}>Cancel</button>
+          <button type="button" onClick={onDone} style={btn.primarySm}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : null;
+}
+
 function BoardCard({
-  c, isEditing, isSelected, isDragging, isResizing, controlsOpen,
-  editText, editRef,
+  c, isSelected, isDragging, isResizing, controlsOpen, linkDrawMode,
   onDown, onResizeDown, onConnectDown, onStartEdit,
-  onEditChange, onFinishEdit, onCancelEdit,
   updateCard, duplicateCard, removeCard,
   themeOf, getCardAccent,
-  dataPoints, impacts, onAddDataPoint, onAddImpact,
 }: {
   c: WorkshopCard;
-  isEditing: boolean;
   isSelected: boolean;
   isDragging: boolean;
   isResizing: boolean;
   controlsOpen: boolean;
-  editText: string;
-  editRef: React.RefObject<HTMLTextAreaElement | null>;
+  linkDrawMode: boolean;
   onDown: (e: React.PointerEvent, id: string) => void;
   onResizeDown: (e: React.PointerEvent, id: string) => void;
   onConnectDown: (e: React.PointerEvent, id: string) => void;
   onStartEdit: (c: WorkshopCard) => void;
-  onEditChange: (v: string) => void;
-  onFinishEdit: (id: string, draft: string) => void;
-  onCancelEdit: (id: string) => void;
   updateCard: (id: string, patch: Record<string, unknown>) => void;
   duplicateCard: (id: string) => void;
   removeCard: (id: string) => void;
   themeOf: (id: string | null | undefined) => Theme | null;
   getCardAccent: (c: { color?: string; theme?: string | null }) => string;
-  dataPoints: string[];
-  impacts: string[];
-  onAddDataPoint: (v: string) => void;
-  onAddImpact: (v: string) => void;
 }) {
   const t = themeOf(c.theme);
   const uncategorised = !c.theme || !t;
   const accent = getCardAccent(c);
-  const displayW = cardDisplayW(c, isEditing);
-  const displayH = cardDisplayH(c, isEditing);
+  const displayW = cardDisplayW(c, false);
+  const displayH = cardDisplayH(c, false);
   const maxFs = sizeCapMax(c);
   const desc = cardDescription(c);
   const textRef = useRef<HTMLDivElement>(null);
@@ -565,21 +1017,15 @@ function BoardCard({
   const showImpactChip = !!impLabel;
 
   const remeasure = useCallback(() => {
-    const el = isEditing ? editRef.current : textRef.current;
+    const el = textRef.current;
     if (!el) return;
-    if (isEditing) {
-      el.style.fontSize = `${maxFs}px`;
-      setFitSize(fitFontSize(el, maxFs));
-    } else {
-      setFitSize(fitFontSize(el, maxFs));
-    }
-  }, [isEditing, maxFs, editRef, desc, displayW, displayH]);
+    setFitSize(fitFontSize(el, maxFs));
+  }, [maxFs, desc, displayW, displayH]);
 
-  useLayoutEffect(() => { remeasure(); }, [remeasure, editText]);
+  useLayoutEffect(() => { remeasure(); }, [remeasure]);
 
   const handleCardPointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
-    if (isEditing) return;
     const target = e.target as HTMLElement;
     if (target.closest("[data-card-action]") || target.closest("[data-handle]")) return;
     onDown(e, c.id);
@@ -591,12 +1037,12 @@ function BoardCard({
   return (
     <div
       data-card
-      className={`board-card${isSelected ? " card-selected" : ""}${isEditing ? " card-editing" : ""}`}
-      style={{ position: "absolute", top: 0, left: 0, width: displayW, transform: `translate(${c.x}px, ${c.y}px)`, transition: isDragging || isResizing ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: isEditing ? 30 : isDragging || isSelected ? 20 : 5 }}
+      className={`board-card${isSelected ? " card-selected" : ""}${linkDrawMode ? " card-link-mode" : ""}`}
+      style={{ position: "absolute", top: 0, left: 0, width: displayW, transform: `translate(${c.x}px, ${c.y}px)`, transition: isDragging || isResizing ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: isDragging || isSelected ? 20 : 5 }}
     >
       <div
         className="card-pop"
-        style={{ position: "relative", width: displayW, height: displayH, transition: sizeTransition, background: C.white, border: `1px solid ${C.border}`, borderTop: uncategorised ? `2px solid ${C.border}` : `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: isEditing ? "text" : "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
+        style={{ position: "relative", width: displayW, height: displayH, transition: sizeTransition, background: C.white, border: `1px solid ${C.border}`, borderTop: uncategorised ? `2px solid ${C.border}` : `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
         onPointerDown={handleCardPointerDown}
       >
         <div
@@ -607,33 +1053,20 @@ function BoardCard({
             <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
           )}
           {c.ai && <span style={tag.ai}>AI</span>}
-          {c.classifying && (
-            <span style={{ ...tag.ai, background: C.surface, color: "#7A8499", fontSize: 9, fontWeight: 700 }}>AI…</span>
-          )}
           <button className="card-dup" data-card-action style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.white, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 5, cursor: "pointer", lineHeight: 1.4 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => duplicateCard(c.id)} title="Duplicate">⧉</button>
-          {isEditing ? (
-            <button
-              data-card-action
-              title="Done"
-              style={{ ...actionBtn, border: `1px solid ${C.border}`, background: C.surface, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 7px", borderRadius: 5 }}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => onFinishEdit(c.id, editText)}
-            >Done</button>
-          ) : (
-            <button
-              data-card-action
-              title="Edit"
-              style={actionBtn}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onStartEdit(c)}
-              aria-label="Edit card"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M12 20h9" />
-                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-              </svg>
-            </button>
-          )}
+          <button
+            data-card-action
+            title="Edit"
+            style={actionBtn}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onStartEdit(c)}
+            aria-label="Edit card"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </button>
           <button data-card-action style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
         </div>
 
@@ -664,64 +1097,12 @@ function BoardCard({
           </div>
         )}
 
-        {isEditing && (
-          <div data-card-action style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8, flexShrink: 0 }}>
-            <OptionSelect
-              label="Data point"
-              value={c.dataPoint || "N/A"}
-              options={dataPoints}
-              onChange={(v) => updateCard(c.id, { dataPoint: v })}
-              onAddNew={onAddDataPoint}
-            />
-            <div>
-              <OptionSelect
-                label="Impact"
-                optional
-                value={c.impact?.type ?? ""}
-                options={impacts}
-                onChange={(v) => {
-                  if (!v) updateCard(c.id, { impact: null });
-                  else updateCard(c.id, { impact: v === HOURS_IMPACT_TYPE ? { type: v, hours: c.impact?.hours ?? 1 } : { type: v } });
-                }}
-                onAddNew={onAddImpact}
-              />
-              {c.impact?.type === HOURS_IMPACT_TYPE && (
-                <input
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={c.impact.hours ?? ""}
-                  onChange={(e) => updateCard(c.id, { impact: { type: HOURS_IMPACT_TYPE, hours: Number(e.target.value) || 0 } })}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  placeholder="hrs/wk"
-                  style={{ ...fieldSelectStyle, marginTop: 4, width: 72 }}
-                />
-              )}
-            </div>
-          </div>
-        )}
-
         <div data-card-body style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          {isEditing ? (
-            <textarea
-              ref={editRef}
-              value={editText}
-              onChange={(e) => onEditChange(e.target.value)}
-              onBlur={() => onFinishEdit(c.id, editText)}
-              onPointerDown={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onFinishEdit(c.id, editText); }
-                if (e.key === "Escape") { e.preventDefault(); onCancelEdit(c.id); }
-              }}
-              style={{ flex: 1, width: "100%", minHeight: 0, fontSize: fitSize, lineHeight: 1.35, color: C.navy, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px", resize: "none", outline: "none", fontFamily: "inherit", boxSizing: "border-box", overflow: "hidden" }}
-            />
-          ) : (
-            <div
-              ref={textRef}
-              style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word" }}
-            >{desc}</div>
-          )}
-          {!isEditing && (showDataChip || showImpactChip) && (
+          <div
+            ref={textRef}
+            style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word" }}
+          >{desc}</div>
+          {(showDataChip || showImpactChip) && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0, marginTop: 6, flexWrap: "wrap" }}>
               {showDataChip && <span style={chipStyle}>{c.dataPoint}</span>}
               {showImpactChip && <span style={chipStyle}>{impLabel}</span>}
@@ -753,11 +1134,56 @@ function BoardCard({
   );
 }
 
+const WORKING_DECK = getWorkingDeck();
+const CLOSING_DECK = getClosingDeck();
+
 export default function WorkshopBoard() {
   const [mode, setMode] = useState<"intro" | "board">("intro");
+  const [deckPhase, setDeckPhase] = useState<"working" | "closing">("working");
+  const [slideIndex, setSlideIndex] = useState(0);
+
+  const handleEnterBoard = () => {
+    setSlideIndex(WORKING_DECK.length - 1);
+    setMode("board");
+  };
+
+  const handleBackToDeck = () => {
+    setDeckPhase("working");
+    setSlideIndex(WORKING_DECK.length - 1);
+    setMode("intro");
+  };
+
+  const handleEndSession = () => {
+    if (
+      !window.confirm(
+        "End the working session and open the closing slides (Next Steps)?\n\nYou can return to the workshop board if this was accidental.",
+      )
+    ) {
+      return;
+    }
+    setDeckPhase("closing");
+    setSlideIndex(0);
+    setMode("intro");
+  };
+
+  const handleBackToBoardFromClosing = () => {
+    setMode("board");
+  };
+
   return (
     <div style={{ fontFamily: "var(--font-dm-sans), system-ui, sans-serif", color: C.navy, height: "100vh", width: "100%", overflow: "hidden", background: C.white }}>
-      {mode === "intro" ? <Intro onEnter={() => setMode("board")} /> : <Board onBack={() => setMode("intro")} />}
+      {mode === "intro" ? (
+        <Intro
+          deck={deckPhase === "closing" ? CLOSING_DECK : WORKING_DECK}
+          slideIndex={slideIndex}
+          onSlideIndexChange={setSlideIndex}
+          deckPhase={deckPhase}
+          onEnter={handleEnterBoard}
+          onBackToBoard={handleBackToBoardFromClosing}
+        />
+      ) : (
+        <Board onBack={handleBackToDeck} onEndSession={handleEndSession} />
+      )}
     </div>
   );
 }
@@ -812,28 +1238,35 @@ function IntroAmbient() {
   );
 }
 
-function Intro({ onEnter }: { onEnter: () => void }) {
-  const [i, setI] = useState(0);
-  const s = DECK[i];
-  const last = i === DECK.length - 1;
+function Intro({
+  deck,
+  slideIndex,
+  onSlideIndexChange,
+  deckPhase,
+  onEnter,
+  onBackToBoard,
+}: {
+  deck: typeof DECK;
+  slideIndex: number;
+  onSlideIndexChange: (index: number) => void;
+  deckPhase: "working" | "closing";
+  onEnter: () => void;
+  onBackToBoard: () => void;
+}) {
+  const i = slideIndex;
+  const setI = onSlideIndexChange;
+  const s = deck[i];
+  const last = i === deck.length - 1;
   const imageSlide = isImageSlide(s);
   const isText = !imageSlide;
   const slideKind = isText && "kind" in s ? (s as { kind: string }).kind : null;
   const isBlueSlide = slideKind === "hero" || slideKind === "credentials";
   const heroTitle = (
     <h1 className="intro-title intro-slide-hero-title">
-      {["SmartCo", " × ", "MUFG", " — AI & Delivery Workshop"].map((part, k) => {
-        const isX = part.trim() === "×";
-        return (
-          <span
-            key={`${part}-${k}`}
-            className={`intro-title-part${isX ? " intro-title-x" : ""}`}
-            style={{ animationDelay: `${0.32 + k * 0.09}s` }}
-          >
-            {part}
-          </span>
-        );
-      })}
+      <span className="intro-title-part" style={{ animationDelay: "0.32s" }}>SmartCo</span>
+      <span className="intro-title-part intro-title-x" style={{ animationDelay: "0.41s" }} aria-hidden="true">×</span>
+      <span className="intro-title-part" style={{ animationDelay: "0.50s" }}>MUFG</span>
+      <span className="intro-title-part" style={{ animationDelay: "0.59s" }}>{" — AI & Delivery Workshop"}</span>
     </h1>
   );
 
@@ -850,7 +1283,17 @@ function Intro({ onEnter }: { onEnter: () => void }) {
           <SmartCoLogo scale={isBlueSlide ? 1 : 1} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {!isBlueSlide && (
+          {deckPhase === "closing" && (
+            <button
+              type="button"
+              className={isText ? "intro-enter" : undefined}
+              style={{ ...btn.ghost, padding: "7px 12px", fontSize: 12, animationDelay: "0.12s" }}
+              onClick={onBackToBoard}
+            >
+              ← Back to workshop board
+            </button>
+          )}
+          {!isBlueSlide && deckPhase === "working" && (
             <button
               type="button"
               className={isText ? "intro-enter" : undefined}
@@ -892,9 +1335,9 @@ function Intro({ onEnter }: { onEnter: () => void }) {
           </div>
         )}
         <div className="intro-deck-footer-nav">
-          <button type="button" className="intro-deck-nav-btn" onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
+          <button type="button" className="intro-deck-nav-btn" onClick={() => setI(Math.max(0, i - 1))} disabled={i === 0}>Back</button>
           <div className="intro-deck-dots">
-            {DECK.map((_, k) => (
+            {deck.map((_, k) => (
               <button
                 key={k}
                 type="button"
@@ -906,7 +1349,7 @@ function Intro({ onEnter }: { onEnter: () => void }) {
             ))}
           </div>
           {!last ? (
-            <button type="button" className="intro-deck-nav-btn" onClick={() => setI((v) => Math.min(DECK.length - 1, v + 1))}>Next</button>
+            <button type="button" className="intro-deck-nav-btn" onClick={() => setI(Math.min(deck.length - 1, i + 1))}>Next</button>
           ) : (
             <span className="intro-deck-nav-spacer" aria-hidden />
           )}
@@ -918,122 +1361,117 @@ function Intro({ onEnter }: { onEnter: () => void }) {
 
 const SECTION_COL_W = 280;
 const SECTION_X0 = 70;
-const SECTION_TOP = 40;
-const SECTION_MIN_H = 480;
-const CATEGORY_POPOVER_Z = 10000;
+function cardDescription(c: { description?: string; text?: string }) {
+  return (c.description ?? c.text ?? "").trim();
+}
 
-function ThemeSectionColumns({ themes, cards }: { themes: Theme[]; cards: any[] }) {
-  const columns: { key: string; label: string; color: string; index: number; themeId: string | null }[] = themes.map((t, i) => ({
+const CATEGORY_POPOVER_Z = 10000;
+const CARD_MENU_Z = CATEGORY_POPOVER_Z + 1;
+
+function ThemeSectionColumns({ themes }: { themes: Theme[] }) {
+  const columns: { key: string; label: string; color: string; index: number }[] = themes.map((t, i) => ({
     key: t.id,
     label: t.label,
     color: t.color,
     index: i,
-    themeId: t.id,
   }));
-  columns.push({
-    key: "uncategorised",
-    label: "Uncategorised",
-    color: C.border,
-    index: themes.length,
-    themeId: null,
-  });
+  columns.push({ key: "uncategorised", label: "Uncategorised", color: C.border, index: themes.length });
 
   return (
     <>
-      {columns.map((col) => {
-        const colCards = cards.filter((c) => (col.themeId ? c.theme === col.themeId : !c.theme));
-        const contentBottom = colCards.length
-          ? Math.max(...colCards.map((c) => c.y + cardH(c)))
-          : SECTION_TOP + SECTION_MIN_H;
-        const height = Math.max(SECTION_MIN_H, contentBottom - SECTION_TOP + 48);
-        return (
-          <div
-            key={col.key}
-            style={{
-              position: "absolute",
-              left: SECTION_X0 + col.index * SECTION_COL_W,
-              top: SECTION_TOP,
-              width: SECTION_COL_W - 20,
-              height,
-              borderRadius: 14,
-              border: `1.5px dashed ${col.color}55`,
-              background: `${col.color}0A`,
-              pointerEvents: "none",
-              zIndex: 0,
-              boxSizing: "border-box",
-            }}
-          >
-            <div
-              style={{
-                margin: "10px 12px 0",
-                padding: "7px 12px",
-                borderRadius: 8,
-                background: col.themeId ? col.color : C.white,
-                color: col.themeId ? C.white : C.navy,
-                border: col.themeId ? "none" : `1px solid ${C.border}`,
-                fontSize: 12,
-                fontWeight: 700,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {col.label}
-            </div>
-          </div>
-        );
-      })}
+      {columns.map((col) => (
+        <div
+          key={col.key}
+          style={{
+            position: "absolute",
+            left: SECTION_X0 + col.index * SECTION_COL_W + 12,
+            top: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            pointerEvents: "none",
+            zIndex: 0,
+            maxWidth: SECTION_COL_W - 24,
+          }}
+        >
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: col.color, flexShrink: 0, border: col.key === "uncategorised" ? `1px solid ${C.border}` : "none" }} />
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#7A8499", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {col.label}
+          </span>
+        </div>
+      ))}
     </>
   );
 }
 
-function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean }) {
+function CategoryDropdown({
+  themes,
+  value,
+  onChange,
+  onCreateCategory,
+}: {
+  themes: Theme[];
+  value: string;
+  onChange: (id: string) => void;
+  onCreateCategory: (label: string) => boolean;
+}) {
   const [open, setOpen] = useState(false);
-  const [label, setLabel] = useState("");
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const active = themes.find((t) => t.id === value);
+
   const measurePos = useCallback(() => {
-    const btn = btnRef.current;
-    if (!btn) return null;
-    const panel = panelRef.current;
-    const r = btn.getBoundingClientRect();
-    const width = 280;
-    const gap = 8;
-    const panelH = panel?.offsetHeight ?? 132;
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const menu = menuRef.current;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 240);
+    const gap = 6;
+    const menuH = menu?.offsetHeight ?? 200;
     const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
-    const top = Math.max(12, r.top - panelH - gap);
-    return { left, top };
+    const top = Math.max(12, r.top - menuH - gap);
+    return { left, top, width };
   }, []);
 
   const close = useCallback(() => {
     setOpen(false);
-    setLabel("");
+    setCreating(false);
+    setDraft("");
     setPos(null);
   }, []);
 
-  const openPopover = useCallback(() => {
-    const btn = btnRef.current;
-    if (!btn) return;
-    const r = btn.getBoundingClientRect();
-    const width = 280;
-    const gap = 8;
-    const estH = 132;
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 240);
+    const estH = 200;
     setPos({
       left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
-      top: Math.max(12, r.top - estH - gap),
+      top: Math.max(12, r.top - estH - 6),
+      width,
     });
+    setCreating(false);
+    setDraft("");
     setOpen(true);
+  }, []);
+
+  const cancelCreate = useCallback(() => {
+    setCreating(false);
+    setDraft("");
   }, []);
 
   useLayoutEffect(() => {
     if (!open) return;
     const next = measurePos();
     if (next) setPos(next);
-    inputRef.current?.focus({ preventScroll: true });
-  }, [open, measurePos]);
+    if (creating) inputRef.current?.focus({ preventScroll: true });
+  }, [open, creating, themes.length, measurePos]);
 
   useEffect(() => {
     if (!open) return;
@@ -1047,13 +1485,24 @@ function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean
       window.removeEventListener("resize", onReflow);
       window.removeEventListener("scroll", onReflow, true);
     };
-  }, [open, measurePos]);
+  }, [open, creating, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (creating) cancelCreate();
+      else close();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, creating, close, cancelCreate]);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
       close();
     };
     document.addEventListener("mousedown", onDoc);
@@ -1061,70 +1510,142 @@ function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean
   }, [open, close]);
 
   const handleCreate = () => {
-    if (onCreate(label)) {
-      setLabel("");
-      close();
-    }
+    if (onCreateCategory(draft)) close();
   };
 
-  const panel = open && pos ? (
+  const itemStyle = (selected: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    border: "none",
+    background: selected ? C.surface : "transparent",
+    color: C.navy,
+    fontSize: 13,
+    fontWeight: selected ? 700 : 600,
+    padding: "9px 12px",
+    cursor: "pointer",
+    textAlign: "left",
+    fontFamily: "inherit",
+  });
+
+  const menu = open && pos ? (
     <div
-      ref={panelRef}
-      role="dialog"
-      aria-label="New category"
+      ref={menuRef}
+      role="listbox"
+      aria-label="Category"
       style={{
         position: "fixed",
         left: pos.left,
         top: pos.top,
-        width: 280,
+        width: pos.width,
         zIndex: CATEGORY_POPOVER_Z,
         background: C.white,
         border: `1px solid ${C.border}`,
         borderRadius: 12,
         boxShadow: "0 10px 30px rgba(10,22,40,.12)",
-        padding: 12,
+        overflow: "hidden",
       }}
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>New category</div>
-      <input
-        ref={inputRef}
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        placeholder="Category label"
-        onKeyDown={(e) => {
-          if (e.key === "Enter") handleCreate();
-          if (e.key === "Escape") close();
-        }}
-        style={{
-          width: "100%",
-          boxSizing: "border-box",
-          border: `1px solid ${C.border}`,
-          borderRadius: 8,
-          padding: "8px 10px",
-          fontSize: 13,
-          color: C.navy,
-          outline: "none",
-          marginBottom: 12,
-        }}
-      />
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button type="button" style={btn.ghost} onClick={close}>Cancel</button>
-        <button type="button" style={btn.primarySm} onClick={handleCreate} disabled={!label.trim()}>Create</button>
-      </div>
+      {creating ? (
+        <div style={{ padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>New category</div>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Category label"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleCreate();
+              if (e.key === "Escape") cancelCreate();
+            }}
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+              padding: "8px 10px",
+              fontSize: 13,
+              color: C.navy,
+              outline: "none",
+              marginBottom: 10,
+            }}
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" style={btn.ghost} onClick={cancelCreate}>Cancel</button>
+            <button type="button" style={btn.primarySm} onClick={handleCreate} disabled={!draft.trim()}>Create</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {themes.map((t) => {
+              const selected = t.id === value;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  style={itemStyle(selected)}
+                  onClick={() => { onChange(t.id); close(); }}
+                >
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: t.color, flexShrink: 0 }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ borderTop: `1px solid ${C.border}` }}>
+            <button
+              type="button"
+              style={{ ...itemStyle(false), color: C.blue, fontWeight: 700 }}
+              onClick={() => { setCreating(true); setDraft(""); }}
+            >
+              + Add category
+            </button>
+          </div>
+        </>
+      )}
     </div>
   ) : null;
 
   return (
     <>
       <button
-        ref={btnRef}
+        ref={triggerRef}
         type="button"
-        style={{ ...btn.ghost, fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
-        onClick={() => (open ? close() : openPopover())}
-      >+ New category</button>
-      {typeof document !== "undefined" && panel ? createPortal(panel, document.body) : null}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => (open ? close() : openMenu())}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+          padding: "9px 10px",
+          fontSize: 13,
+          color: C.navy,
+          background: C.white,
+          fontWeight: 600,
+          flexShrink: 0,
+          cursor: "pointer",
+          fontFamily: "inherit",
+          maxWidth: 200,
+        }}
+      >
+        {active && (
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: active.color, flexShrink: 0 }} />
+        )}
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {active?.label ?? "Category"}
+        </span>
+        <span style={{ marginLeft: "auto", color: "#9AA3B2", fontSize: 10, flexShrink: 0 }} aria-hidden>▾</span>
+      </button>
+      {typeof document !== "undefined" && menu ? createPortal(menu, document.body) : null}
     </>
   );
 }
@@ -1223,7 +1744,7 @@ function BoardTabBar({
   );
 }
 
-function Board({ onBack }: { onBack: () => void }) {
+function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () => void }) {
   const initial = defaultSession();
   const [boards, setBoards] = useState<BoardData[]>(initial.boards);
   const [activeId, setActiveId] = useState(initial.activeId);
@@ -1240,6 +1761,8 @@ function Board({ onBack }: { onBack: () => void }) {
   const cards = activeBoard?.cards ?? [];
   const links = activeBoard?.links ?? [];
   const insight = activeBoard?.insight ?? "";
+  const arrangeBy: ArrangeByKey = activeBoard?.arrangeBy ?? "category";
+  const showLinkages = activeBoard?.showLinkages !== false;
 
   const boardCtxRef = useRef({ boards, activeId });
   boardCtxRef.current = { boards, activeId };
@@ -1306,18 +1829,17 @@ function Board({ onBack }: { onBack: () => void }) {
   const [resize, setResize] = useState<{ id: string; startWx: number; startWy: number; startW: number; startH: number } | null>(null);
   const [connecting, setConnecting] = useState<{ fromId: string } | null>(null);
   const [connectCursor, setConnectCursor] = useState<{ x: number; y: number } | null>(null);
+  const [linkDrawMode, setLinkDrawMode] = useState(false);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panDrag, setPanDrag] = useState<{ sx: number; sy: number; spx: number; spy: number } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState("");
-  const [editOriginal, setEditOriginal] = useState("");
+  const [composer, setComposer] = useState<ComposerState | null>(null);
+  const composerClassifyRef = useRef(0);
   const [controlsCardId, setControlsCardId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState({ top: false, right: false, bottom: false });
   const canvasRef = useRef<HTMLDivElement>(null);
-  const editRef = useRef<HTMLTextAreaElement>(null);
   const zoomPanRef = useRef({ zoom: 1, panX: 0, panY: 0 });
   const loaded = useRef(false);
   const panelsLoaded = useRef(false);
@@ -1440,16 +1962,150 @@ function Board({ onBack }: { onBack: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards]);
 
+  const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
+    setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  }, [setCards]);
+
+  const makeDraftCard = useCallback((opts: { text?: string; theme?: string | null; ai?: boolean; pos?: { x: number; y: number } }): WorkshopCard => {
+    const th = opts.theme ?? null;
+    const txt = (opts.text ?? "").trim();
+    const reg = th == null ? themes.length : themes.findIndex((x) => x.id === th);
+    const col = reg < 0 ? themes.length : reg;
+    return {
+      id: newId(),
+      theme: th,
+      text: txt,
+      description: txt,
+      dataPoint: "N/A",
+      impact: null,
+      x: opts.pos?.x ?? SECTION_X0 + col * SECTION_COL_W + Math.random() * 40,
+      y: opts.pos?.y ?? 320 + Math.random() * 140,
+      ai: !!opts.ai,
+      classifying: false,
+    };
+  }, [themes]);
+
+  const openComposerCreate = useCallback((opts: { text?: string; theme?: string | null; ai?: boolean; pos?: { x: number; y: number } }) => {
+    const draft = makeDraftCard(opts);
+    setComposer({ mode: "create", draft, aiRan: false });
+    setSelectedId(null);
+    setControlsCardId(null);
+  }, [makeDraftCard]);
+
+  const openComposerEdit = useCallback((c: WorkshopCard) => {
+    setComposer({ mode: "edit", draft: { ...c }, aiRan: true });
+    setSelectedId(c.id);
+    setControlsCardId(null);
+  }, []);
+
+  const updateComposerDraft = useCallback((patch: Partial<WorkshopCard>) => {
+    setComposer((prev) => (prev ? { ...prev, draft: { ...prev.draft, ...patch } } : null));
+  }, []);
+
+  const composerThemeChange = useCallback((themeId: string | null) => {
+    const col = columnIndex(themeId, themes);
+    updateComposerDraft({
+      theme: themeId,
+      x: SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40,
+    });
+  }, [themes, updateComposerDraft]);
+
+  const runComposerClassify = useCallback(async (seed: string, currentTheme: string | null) => {
+    const reqId = ++composerClassifyRef.current;
+    setComposer((prev) => {
+      if (!prev || prev.mode !== "create" || prev.aiRan) return prev;
+      return { ...prev, aiRan: true, draft: { ...prev.draft, classifying: true } };
+    });
+    const patch = await fetchClassifyFields(seed, currentTheme, { dataPoints, impacts, themes, provider });
+    if (composerClassifyRef.current !== reqId) return;
+    setComposer((prev) => {
+      if (!prev) return null;
+      const nextDraft = { ...prev.draft, ...patch, classifying: false };
+      if (patch.theme && prev.draft.theme == null && themes.some((t) => t.id === patch.theme)) {
+        const col = columnIndex(patch.theme, themes);
+        nextDraft.theme = patch.theme;
+        nextDraft.x = SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40;
+      }
+      return { ...prev, draft: nextDraft };
+    });
+  }, [dataPoints, impacts, themes, provider]);
+
   useEffect(() => {
-    if (editingId && editRef.current) {
-      editRef.current.focus();
-      editRef.current.select();
+    if (!composer || composer.mode !== "create" || composer.aiRan) return;
+    const seed = composer.draft.text?.trim() || composer.draft.description?.trim();
+    if (!seed) return;
+    const timer = setTimeout(() => { void runComposerClassify(seed, composer.draft.theme); }, 500);
+    return () => clearTimeout(timer);
+  }, [composer, runComposerClassify]);
+
+  const composerDone = useCallback(() => {
+    if (!composer) return;
+    const d = composer.draft;
+    const desc = cardDescription(d).trim();
+    if (!desc) {
+      setComposer(null);
+      return;
     }
-  }, [editingId]);
+    const final: WorkshopCard = {
+      ...d,
+      text: d.text?.trim() || desc,
+      description: desc,
+      classifying: false,
+    };
+    if (composer.mode === "create") {
+      setCards((c) => [...c, final]);
+      setSelectedId(final.id);
+    } else {
+      updateCard(final.id, {
+        text: final.text,
+        description: final.description,
+        theme: final.theme,
+        dataPoint: final.dataPoint,
+        impact: final.impact,
+        x: final.x,
+        y: final.y,
+        ai: final.ai,
+      });
+    }
+    setComposer(null);
+  }, [composer, setCards, updateCard]);
+
+  const composerCancel = useCallback(() => {
+    composerClassifyRef.current += 1;
+    setComposer(null);
+  }, []);
+
+  const setShowLinkages = useCallback((visible: boolean) => {
+    setBoards((bs) => bs.map((b) => (b.id === activeIdRef.current ? { ...b, showLinkages: visible } : b)));
+  }, []);
+
+  const cancelConnecting = useCallback(() => {
+    setConnecting(null);
+    setConnectCursor(null);
+  }, []);
+
+  const toggleLinkDrawMode = useCallback(() => {
+    setLinkDrawMode((on) => {
+      if (on) cancelConnecting();
+      return !on;
+    });
+  }, [cancelConnecting]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (editingId) return;
+      if (e.key === "Escape") {
+        if (connecting) {
+          e.preventDefault();
+          cancelConnecting();
+          return;
+        }
+        if (linkDrawMode) {
+          e.preventDefault();
+          setLinkDrawMode(false);
+          return;
+        }
+      }
+      if (composer) return;
       if ((e.key === "Delete" || e.key === "Backspace") && selectedLinkId) {
         e.preventDefault();
         setLinks((l) => l.filter((link) => link.id !== selectedLinkId));
@@ -1458,123 +2114,27 @@ function Board({ onBack }: { onBack: () => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedLinkId, editingId]);
+  }, [selectedLinkId, composer, connecting, linkDrawMode, cancelConnecting, setLinks]);
 
-  const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
-    setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  }, [setCards]);
+  const applyArrange = useCallback((sortBy: ArrangeByKey) => {
+    setBoards((bs) => bs.map((b) => {
+      if (b.id !== activeIdRef.current) return b;
+      return { ...b, arrangeBy: sortBy, cards: layoutCards(b.cards as WorkshopCard[], sortBy, themes) };
+    }));
+  }, [themes]);
 
-  const classifyCard = useCallback(async (cardId: string, input: string, currentTheme: string | null) => {
-    const seed = input.trim();
-    if (!seed) return;
-    updateCard(cardId, { classifying: true });
-    const { system, content } = buildClassifyPrompt(seed, {
-      dataPoints,
-      impacts,
-      themeIds: themes.map((t) => t.id),
-    });
-    try {
-      const { text, error } = await callAIResult(system, content, provider);
-      if (error) throw new Error(error);
-      const parsed = parseJSON(text) as {
-        description?: string;
-        dataPoint?: string;
-        impact?: { type?: string; hours?: number };
-        theme?: string;
-      } | null;
-      if (!parsed) throw new Error("parse failed");
-      const patch: Record<string, unknown> = {
-        classifying: false,
-        description: typeof parsed.description === "string" && parsed.description.trim() ? parsed.description.trim() : seed,
-        dataPoint: matchOption(parsed.dataPoint, dataPoints) ?? "N/A",
-      };
-      const impactType = matchOption(parsed.impact?.type, impacts);
-      if (impactType) {
-        patch.impact =
-          impactType === HOURS_IMPACT_TYPE
-            ? { type: impactType, hours: typeof parsed.impact?.hours === "number" ? parsed.impact.hours : undefined }
-            : { type: impactType };
-      } else {
-        patch.impact = null;
-      }
-      if (currentTheme == null && parsed.theme && themes.some((t) => t.id === parsed.theme)) {
-        patch.theme = parsed.theme;
-      }
-      updateCard(cardId, patch);
-    } catch {
-      updateCard(cardId, { classifying: false, description: seed, dataPoint: "N/A", impact: null });
-    }
-  }, [dataPoints, impacts, themes, provider, updateCard]);
-
-  const addCard = useCallback((t: string, th: string | null, ai = false, pos?: { x: number; y: number }, openEdit = false) => {
-    const txt = (t || "").trim();
-    if (!txt && !openEdit) return;
-    const reg = th == null ? themes.length : themes.findIndex((x) => x.id === th);
-    const col = reg < 0 ? themes.length : reg;
-    const x = pos?.x ?? SECTION_X0 + col * SECTION_COL_W + Math.random() * 40;
-    const y = pos?.y ?? 320 + Math.random() * 140;
-    const id = newId();
-    const card: WorkshopCard = {
-      id,
-      theme: th,
-      text: txt,
-      description: txt,
-      dataPoint: "N/A",
-      impact: null,
-      x,
-      y,
-      ai,
-      classifying: !!txt && !openEdit,
-    };
-    setCards((c) => [...c, card]);
-    if (txt && !openEdit) void classifyCard(id, txt, th);
-    if (openEdit) {
-      setEditingId(id);
-      setEditText(txt);
-      setEditOriginal(txt);
-      setSelectedId(id);
-    }
-    return id;
-  }, [themes, setCards, classifyCard]);
-
-  const submit = () => { addCard(text, theme); setText(""); };
+  const submit = () => {
+    openComposerCreate({ text: text.trim(), theme });
+    setText("");
+  };
   const removeCard = (id: string) => {
     setCards((c) => c.filter((x) => x.id !== id));
     setLinks((l) => l.filter((x) => x.a !== id && x.b !== id));
     if (selectedId === id) setSelectedId(null);
-    if (editingId === id) { setEditingId(null); setEditText(""); }
+    if (composer?.mode === "edit" && composer.draft.id === id) setComposer(null);
   };
 
-  const finishEdit = (id: string, draft: string) => {
-    const trimmed = draft.trim();
-    if (!trimmed) removeCard(id);
-    else {
-      const card = cards.find((x) => x.id === id);
-      const wasBlank = !cardDescription(card || {});
-      updateCard(id, {
-        description: trimmed,
-        text: card?.text?.trim() ? card.text : trimmed,
-        classifying: wasBlank,
-      });
-      if (wasBlank) void classifyCard(id, card?.text?.trim() || trimmed, card?.theme ?? null);
-    }
-    setEditingId(null);
-    setEditText("");
-  };
-
-  const cancelEdit = (id: string) => {
-    if (!editOriginal.trim()) removeCard(id);
-    setEditingId(null);
-    setEditText("");
-  };
-
-  const startEdit = (c: WorkshopCard) => {
-    setEditingId(c.id);
-    setEditText(cardDescription(c));
-    setEditOriginal(cardDescription(c));
-    setSelectedId(c.id);
-    setControlsCardId(null);
-  };
+  const startEdit = (c: WorkshopCard) => openComposerEdit(c);
 
   const duplicateCard = (id: string) => {
     const c = cards.find((x) => x.id === id);
@@ -1594,13 +2154,12 @@ function Board({ onBack }: { onBack: () => void }) {
   }, [setLinks]);
 
   const clearBoardUi = () => {
-    setEditingId(null);
-    setEditText("");
+    setComposer(null);
+    setLinkDrawMode(false);
+    cancelConnecting();
     setSelectedId(null);
     setSelectedLinkId(null);
     setControlsCardId(null);
-    setConnecting(null);
-    setConnectCursor(null);
     setDrag(null);
     setResize(null);
     setPanDrag(null);
@@ -1669,11 +2228,11 @@ function Board({ onBack }: { onBack: () => void }) {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (rect) {
       const { x: wx, y: wy } = toWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
-      addCard("", null, false, { x: Math.max(0, wx - CARD_W / 2), y: Math.max(0, wy - CARD_H / 2) }, true);
+      openComposerCreate({ pos: { x: wx - CARD_W / 2, y: wy - CARD_H / 2 } });
     } else {
-      addCard("", null, false, undefined, true);
+      openComposerCreate({});
     }
-  }, [addCard, toWorld]);
+  }, [openComposerCreate, toWorld]);
 
   const zoomAtPoint = useCallback((newZoom: number, mx: number, my: number) => {
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
@@ -1701,11 +2260,12 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const onCanvasDown = (e: React.PointerEvent) => {
     const t = e.target as HTMLElement;
-    if (editingId) {
-      if (!t.closest("[data-card]")) finishEdit(editingId, editText);
+    if (composer) return;
+    if (connecting) {
+      cancelConnecting();
       return;
     }
-    if (e.button !== 0 || connecting) return;
+    if (e.button !== 0) return;
     if (t.closest("[data-board-ui]") || t.closest("[data-panel-ui]") || t.closest("[data-card]") || t.closest("[data-link-ui]")) return;
     setSelectedId(null);
     setSelectedLinkId(null);
@@ -1718,18 +2278,38 @@ function Board({ onBack }: { onBack: () => void }) {
     const t = e.target as HTMLElement;
     if (t.closest("[data-board-ui]") || t.closest("[data-card]")) return;
     const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
-    addCard("", theme, false, { x: wx - CARD_W / 2, y: wy - CARD_H / 2 }, true);
+    openComposerCreate({ theme, pos: { x: wx - CARD_W / 2, y: wy - CARD_H / 2 } });
   };
 
   const onDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
-    if (editingId) return;
+    if (composer) return;
     const t = e.target as HTMLElement;
     if (t.closest("[data-card-action]") || t.closest("[data-handle]")) return;
     const c = cards.find((x) => x.id === id);
     if (!c) return;
     if (!t.closest(".card-controls-popover") && !t.closest("[data-card-header]")) setControlsCardId(null);
     setSelectedId(id);
+
+    if (linkDrawMode) {
+      if (connecting) {
+        if (connecting.fromId !== id) {
+          setLinks((l) => [
+            ...l,
+            { id: newLinkId(), a: connecting.fromId, b: id, manual: true, color: C.navy, style: "solid" as const },
+          ]);
+        }
+        cancelConnecting();
+      } else {
+        setConnecting({ fromId: id });
+        setConnectCursor({
+          x: c.x + cardDisplayW(c, false) / 2,
+          y: c.y + cardDisplayH(c, false) / 2,
+        });
+      }
+      return;
+    }
+
     const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
     setDrag({ id, dx: wx - c.x, dy: wy - c.y });
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -1770,25 +2350,26 @@ function Board({ onBack }: { onBack: () => void }) {
       setCards((c) => c.map((x0) => (x0.id === resize.id ? { ...x0, w, h } : x0)));
       return;
     }
-    if (!drag || editingId) return;
+    if (!drag || composer) return;
     const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
-    const x = Math.max(0, wx - drag.dx);
-    const y = Math.max(0, wy - drag.dy);
+    const x = wx - drag.dx;
+    const y = wy - drag.dy;
     setCards((c) => c.map((x0) => (x0.id === drag.id ? { ...x0, x, y } : x0)));
   };
 
   const onUp = (e?: React.PointerEvent) => {
-    if (connecting && e) {
-      const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
-      const target = findCardAtWorld(cards, wx, wy);
-      if (target && target.id !== connecting.fromId) {
-        setLinks((l) => [
-          ...l,
-          { id: newLinkId(), a: connecting.fromId, b: target.id, manual: true, color: C.navy, style: "solid" as const },
-        ]);
+    if (connecting) {
+      if (e) {
+        const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
+        const target = findCardAtWorld(cards, wx, wy);
+        if (target && target.id !== connecting.fromId) {
+          setLinks((l) => [
+            ...l,
+            { id: newLinkId(), a: connecting.fromId, b: target.id, manual: true, color: C.navy, style: "solid" as const },
+          ]);
+        }
       }
-      setConnecting(null);
-      setConnectCursor(null);
+      cancelConnecting();
     }
     setDrag(null);
     setPanDrag(null);
@@ -1802,16 +2383,6 @@ function Board({ onBack }: { onBack: () => void }) {
   };
 
   const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
-
-  const arrange = () => {
-    setCards((c) => c.map((card) => {
-      const reg = card.theme == null ? themes.length : themes.findIndex((t) => t.id === card.theme);
-      const col = reg < 0 ? themes.length : reg;
-      const same = c.filter((k) => k.theme === card.theme);
-      const row = same.indexOf(card);
-      return { ...card, x: SECTION_X0 + col * SECTION_COL_W, y: 80 + row * 122 };
-    }));
-  };
 
   const reviewPrompt = () => buildReviewPrompt(cards, resolveThemeLabel);
 
@@ -1902,13 +2473,13 @@ function Board({ onBack }: { onBack: () => void }) {
     if (!selectedSuggestProvider || !suggestCandidates) return;
     const candidate = suggestCandidates[selectedSuggestProvider];
     if (!candidate?.text || candidate.error) return;
-    addCard(candidate.text, suggestCategory, true);
+    openComposerCreate({ text: candidate.text, theme: suggestCategory, ai: true });
     closeSuggestPicker();
   };
 
-  const center = (c: any) => ({
-    x: c.x + cardDisplayW(c, c.id === editingId) / 2,
-    y: c.y + cardDisplayH(c, c.id === editingId) / 2,
+  const center = (c: WorkshopCard) => ({
+    x: c.x + cardDisplayW(c, false) / 2,
+    y: c.y + cardDisplayH(c, false) / 2,
   });
 
   const linkSlots = pairSlotMaps(links as LinkData[]);
@@ -1938,6 +2509,13 @@ function Board({ onBack }: { onBack: () => void }) {
         <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "14px 20px", background: C.white, borderBottom: `1px solid ${C.border}`, flexWrap: "wrap", position: "relative" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <button style={btn.ghost} onClick={onBack}>← Deck</button>
+            <button
+              type="button"
+              style={{ ...btn.ghost, borderColor: C.coral, color: C.coral, fontWeight: 700 }}
+              onClick={onEndSession}
+            >
+              End session
+            </button>
             <SmartCoLogo scale={0.85} />
             <span style={{ color: C.border }}>×</span>
             <MUFGLogo scale={0.85} />
@@ -1951,6 +2529,7 @@ function Board({ onBack }: { onBack: () => void }) {
               {AI_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
             <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
+            <QuestionsNavLink style={{ textDecoration: "none" }} />
             <AskButton />
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               <button style={btn.ai(C.yellow)} onClick={compareModels} disabled={busy.compare || !cards.length}>{busy.compare ? "Comparing…" : "Compare models"}</button>
@@ -1979,7 +2558,39 @@ function Board({ onBack }: { onBack: () => void }) {
                 prompt={() => buildSingleSuggestPrompt(cards, resolveThemeLabel)}
               />
             </span>
-            <button style={btn.ai(C.navy)} onClick={arrange}>Arrange by theme</button>
+            <label style={{ ...btn.ai(C.navy), display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              Arrange by
+              <select
+                value={arrangeBy}
+                onChange={(e) => applyArrange(e.target.value as ArrangeByKey)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: C.navy,
+                  fontWeight: 700,
+                  fontSize: 13,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  outline: "none",
+                }}
+              >
+                {ARRANGE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+            </label>
+            <button
+              type="button"
+              style={{
+                ...btn.ghost,
+                ...(showLinkages ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}),
+              }}
+              aria-pressed={showLinkages}
+              onClick={() => {
+                setShowLinkages(!showLinkages);
+                if (showLinkages) setSelectedLinkId(null);
+              }}
+            >
+              {showLinkages ? "Linkages on" : "Linkages off"}
+            </button>
             <button style={btn.primarySm} onClick={() => setShowPack(true)}>Takeaway pack</button>
           </div>
           <button
@@ -2008,7 +2619,7 @@ function Board({ onBack }: { onBack: () => void }) {
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
         <div
           ref={canvasRef}
-          style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none", cursor: connecting ? "crosshair" : panDrag ? "grabbing" : drag ? "grabbing" : "grab" }}
+          style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none", cursor: linkDrawMode || connecting ? "crosshair" : panDrag ? "grabbing" : drag ? "grabbing" : "grab" }}
           onPointerDown={onCanvasDown}
           onDoubleClick={onCanvasDblClick}
           onPointerMove={onMove}
@@ -2027,9 +2638,9 @@ function Board({ onBack }: { onBack: () => void }) {
               transformOrigin: "0 0",
             }}
           >
-            <ThemeSectionColumns themes={themes} cards={cards} />
+            <ThemeSectionColumns themes={themes} />
             <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible", zIndex: 1 }}>
-              {links.map((l) => {
+              {showLinkages && links.map((l) => {
                 const link = l as LinkData;
                 const a = cards.find((c) => c.id === link.a);
                 const b = cards.find((c) => c.id === link.b);
@@ -2074,7 +2685,7 @@ function Board({ onBack }: { onBack: () => void }) {
                   </g>
                 );
               })}
-              {connecting && connectCursor && (() => {
+              {showLinkages && connecting && connectCursor && (() => {
                 const from = cards.find((c) => c.id === connecting.fromId);
                 if (!from) return null;
                 const pa = center(from);
@@ -2088,29 +2699,20 @@ function Board({ onBack }: { onBack: () => void }) {
               <BoardCard
                 key={c.id}
                 c={c}
-                isEditing={editingId === c.id}
                 isSelected={selectedId === c.id}
                 isDragging={drag?.id === c.id}
                 isResizing={resize?.id === c.id}
                 controlsOpen={controlsCardId === c.id}
-                editText={editText}
-                editRef={editRef}
+                linkDrawMode={linkDrawMode}
                 onDown={onDown}
                 onResizeDown={onResizeDown}
                 onConnectDown={onConnectDown}
                 onStartEdit={startEdit}
-                onEditChange={setEditText}
-                onFinishEdit={finishEdit}
-                onCancelEdit={cancelEdit}
                 updateCard={updateCard}
                 duplicateCard={duplicateCard}
                 removeCard={removeCard}
                 themeOf={resolveTheme}
                 getCardAccent={getCardAccent}
-                dataPoints={dataPoints}
-                impacts={impacts}
-                onAddDataPoint={addDataPoint}
-                onAddImpact={addImpact}
               />
             ))}
           </div>
@@ -2166,14 +2768,12 @@ function Board({ onBack }: { onBack: () => void }) {
                     onClick={() => togglePanel("bottom")}
                     style={{ ...panelTab, width: PANEL_TAB, height: PANEL_TAB, flexShrink: 0, borderRadius: 6 }}
                   >▾</button>
-                  <select
+                  <CategoryDropdown
+                    themes={themes}
                     value={theme}
-                    onChange={(e) => setTheme(e.target.value)}
-                    style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "0 8px", fontSize: 13, color: C.navy, background: C.white, flexShrink: 0 }}
-                  >
-                    {themes.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                  </select>
-                  <NewCategoryPopover onCreate={createCategory} />
+                    onChange={setTheme}
+                    onCreateCategory={createCategory}
+                  />
                   <input
                     style={{ flex: "1 1 120px", minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }}
                     placeholder="Type a pain point or use case, then Enter"
@@ -2209,6 +2809,17 @@ function Board({ onBack }: { onBack: () => void }) {
                 <span style={{ ...btn.ghost, cursor: "default", minWidth: 52, textAlign: "center", padding: "9px 10px" }}>{Math.round(zoom * 100)}%</span>
                 <button type="button" style={btn.ghost} onClick={() => zoomStep(0.15)} aria-label="Zoom in">+</button>
                 <button type="button" style={btn.ghost} onClick={resetView}>Reset</button>
+                <button
+                  type="button"
+                  style={{
+                    ...btn.ghost,
+                    ...(linkDrawMode ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}),
+                  }}
+                  aria-pressed={linkDrawMode}
+                  onClick={toggleLinkDrawMode}
+                >
+                  {linkDrawMode ? "Done drawing" : "Draw links"}
+                </button>
               </div>
             </div>
           </div>
@@ -2271,6 +2882,22 @@ function Board({ onBack }: { onBack: () => void }) {
         )}
       </div>
 
+      {composer && (
+        <CardComposerModal
+          mode={composer.mode}
+          draft={composer.draft}
+          classifying={!!composer.draft.classifying}
+          themes={themes}
+          dataPoints={dataPoints}
+          impacts={impacts}
+          onDraftChange={updateComposerDraft}
+          onThemeChange={composerThemeChange}
+          onAddDataPoint={addDataPoint}
+          onAddImpact={addImpact}
+          onDone={composerDone}
+          onCancel={composerCancel}
+        />
+      )}
       {showPack && (
         <Pack
           boards={boards}
