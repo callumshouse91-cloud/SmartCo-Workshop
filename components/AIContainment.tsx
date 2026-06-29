@@ -29,11 +29,12 @@ export function AIContainment({ compact }: { compact?: boolean }) {
   const blockedEnd = { x: wallRight - 10, y: cy };
 
   return (
-    <div style={{ width: "100%", maxWidth: w, margin: "0 auto" }}>
+    <div className="intro-diagram-host">
       <svg
         viewBox={`0 0 ${w} ${h}`}
         width="100%"
-        height="auto"
+        height="100%"
+        preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label="AI containment diagram: Gemini and GPT bring intelligence in; Claude forms a sealed wall; your workshop data stays inside; nothing leaves"
         className="ai-containment"

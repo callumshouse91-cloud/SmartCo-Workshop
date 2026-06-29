@@ -8,7 +8,7 @@ export type AgendaRow = {
 
 export type CapabilityCard = { title: string; desc: string };
 
-export type PhaseBlock = { title: string; items: string[] };
+export type PhaseBlock = { title: string; label: string; items: string[] };
 
 export type FocusArea = { title: string; level: string; desc: string };
 
@@ -50,6 +50,12 @@ export type DeckSlide =
       challenges: string[];
       focusIntro: string;
       focusItems: string[];
+    }
+  | {
+      kind: "phase-timeline";
+      eyebrow: string;
+      title: string;
+      phases: { title: string; label: string }[];
     }
   | {
       kind: "transformation";
@@ -96,6 +102,34 @@ export type DeckSlide =
 export function isImageSlide(s: DeckSlide): s is { image: string; cta?: string } {
   return "image" in s && !!s.image;
 }
+
+export const TRANSFORMATION_PHASES: PhaseBlock[] = [
+  {
+    title: "Phase 1",
+    label: "Align on context · surface pain points",
+    items: [
+      "Initial Alignment & Context Setting — Establish a shared understanding of the business context, strategic priorities, and key KPIs, ensuring alignment on the high-level problem space.",
+      "Challenges & Pain Point Identification — Facilitate targeted workshops to uncover current challenges, operational pain points, capturing insights directly from the PMO function.",
+    ],
+  },
+  {
+    title: "Phase 2",
+    label: "Validate opportunities · replay insights",
+    items: [
+      "Focused Deep Dive & Opportunity Validation — Progress priority areas identified in Phase 1 into detailed analysis, validating root causes, quantifying impact, and confirming where targeted intervention will deliver the most value.",
+      "Synthesis & Insight Replay — Consolidate findings into key themes and patterns, replaying insights with stakeholders to validate understanding and highlight priority areas for deeper exploration.",
+    ],
+  },
+  {
+    title: "Phase 3",
+    label: "Design solution · prove value · scale",
+    items: [
+      "Solution Design & Implementation Roadmap — Develop a pragmatic, fit-for-purpose solution with clearly defined components, supported by a phased roadmap that sequences delivery, aligns to agreed focus areas, and sets out clear milestones for execution.",
+      "Proof of Value, Refinement & Rollout — Execute a proof of concept to validate the approach in a controlled setting, refine based on outcomes, and establish a clear pathway for scaled rollout and implementation.",
+      "Strategic Scaling & Future Opportunity — Opportunity to extend the solution into a broader strategic capability over time, leveraging established foundations to support wider business objectives and long-term value creation.",
+    ],
+  },
+];
 
 /*
   Image slides: replace DECK with e.g.
@@ -195,32 +229,16 @@ export const DECK: DeckSlide[] = [
   },
 
   {
+    kind: "phase-timeline",
+    eyebrow: "AI ADOPTION & TRANSFORMATION APPROACH",
+    title: "Three phases to build with you",
+    phases: TRANSFORMATION_PHASES.map((p) => ({ title: p.title, label: p.label })),
+  },
+
+  {
     kind: "transformation",
     title: "AI Adoption & Transformation Approach",
-    phases: [
-      {
-        title: "Phase 1",
-        items: [
-          "Initial Alignment & Context Setting — Establish a shared understanding of the business context, strategic priorities, and key KPIs, ensuring alignment on the high-level problem space.",
-          "Challenges & Pain Point Identification — Facilitate targeted workshops to uncover current challenges, operational pain points, capturing insights directly from the PMO function.",
-        ],
-      },
-      {
-        title: "Phase 2",
-        items: [
-          "Focused Deep Dive & Opportunity Validation — Progress priority areas identified in Phase 1 into detailed analysis, validating root causes, quantifying impact, and confirming where targeted intervention will deliver the most value.",
-          "Synthesis & Insight Replay — Consolidate findings into key themes and patterns, replaying insights with stakeholders to validate understanding and highlight priority areas for deeper exploration.",
-        ],
-      },
-      {
-        title: "Phase 3",
-        items: [
-          "Solution Design & Implementation Roadmap — Develop a pragmatic, fit-for-purpose solution with clearly defined components, supported by a phased roadmap that sequences delivery, aligns to agreed focus areas, and sets out clear milestones for execution.",
-          "Proof of Value, Refinement & Rollout — Execute a proof of concept to validate the approach in a controlled setting, refine based on outcomes, and establish a clear pathway for scaled rollout and implementation.",
-          "Strategic Scaling & Future Opportunity — Opportunity to extend the solution into a broader strategic capability over time, leveraging established foundations to support wider business objectives and long-term value creation.",
-        ],
-      },
-    ],
+    phases: TRANSFORMATION_PHASES,
   },
 
   {

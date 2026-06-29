@@ -12,7 +12,7 @@ import {
   buildSuggestPrompt,
 } from "@/lib/prompts";
 import { DECK, isImageSlide } from "./deck";
-import { renderDeckSlide, slideNeedsScroll } from "./IntroSlides";
+import { renderDeckSlide } from "./IntroSlides";
 
 const CARD_W = 216;
 const CARD_H = 104;
@@ -497,9 +497,8 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   const last = i === DECK.length - 1;
   const imageSlide = isImageSlide(s);
   const isText = !imageSlide;
-  const scrollable = isText && slideNeedsScroll(s);
   const heroTitle = (
-    <h1 className="intro-title" style={{ margin: 0 }}>
+    <h1 className="intro-title" style={{ margin: 0, fontSize: "clamp(28px, 4vw, 48px)" }}>
       {["SmartCo", " × ", "MUFG", " — AI & Delivery Workshop"].map((part, k) => {
         const isX = part.trim() === "×";
         return (
@@ -516,10 +515,14 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   );
 
   return (
-    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", background: `linear-gradient(160deg, ${C.white} 0%, ${C.surface} 100%)`, padding: "28px clamp(16px, 4vw, 40px)", overflow: "hidden" }}>
-      {isText ? <IntroAmbient /> : <Corner />}
+    <div className="intro-deck">
+      {isText && (
+        <div className="intro-deck-ambient">
+          <IntroAmbient />
+        </div>
+      )}
 
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative", flexShrink: 0 }}>
+      <header className="intro-deck-header">
         <div className={isText ? "intro-enter intro-logo-left" : undefined}>
           <SmartCoLogo />
         </div>
@@ -538,38 +541,26 @@ function Intro({ onEnter }: { onEnter: () => void }) {
         </div>
       </header>
 
-      {imageSlide ? (
-        <div key={i} className="enter-up" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2, minHeight: 0 }}>
-          <img src={s.image} alt={`Slide ${i + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, boxShadow: "0 18px 50px rgba(10,22,40,.14)" }} />
-        </div>
-      ) : (
-        <div
-          key={i}
-          className={scrollable ? "intro-scroll" : undefined}
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: scrollable ? "flex-start" : "center",
-            maxWidth: scrollable ? 960 : 760,
-            width: "100%",
-            margin: scrollable ? "12px auto 0" : undefined,
-            zIndex: 2,
-            position: "relative",
-            minHeight: 0,
-          }}
-        >
-          {renderDeckSlide(s, onEnter, heroTitle)}
-        </div>
-      )}
+      <main className="intro-deck-main">
+        {imageSlide ? (
+          <div key={i} className="enter-up intro-slide-fit" style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <img src={s.image} alt={`Slide ${i + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, boxShadow: "0 18px 50px rgba(10,22,40,.14)", objectFit: "contain" }} />
+            {!isText && <Corner />}
+          </div>
+        ) : (
+          <div key={i} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {renderDeckSlide(s, onEnter, heroTitle)}
+          </div>
+        )}
+      </main>
 
       {imageSlide && s.cta && last && (
-        <div className="enter-up" style={{ position: "absolute", right: 40, bottom: 90, zIndex: 3 }}>
-          <button style={btn.primary} onClick={onEnter}>{s.cta} →</button>
+        <div style={{ position: "absolute", right: 40, bottom: 72, zIndex: 11 }}>
+          <button className="enter-up" style={btn.primary} onClick={onEnter}>{s.cta} →</button>
         </div>
       )}
 
-      <footer style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative", flexShrink: 0, paddingTop: 12 }}>
+      <footer className="intro-deck-footer">
         <button type="button" style={btn.ghost} onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", maxWidth: "60%" }}>
           {DECK.map((_, k) => (
@@ -1225,9 +1216,15 @@ function Board({ onBack }: { onBack: () => void }) {
     y: c.y + cardDisplayH(c, c.id === editingId) / 2,
   });
 
-  const zoomBottom = collapsed.bottom ? 12 : 20;
-  const zoomRight = collapsed.right ? PANEL_TAB + 8 : 16;
   const linkSlots = pairSlotMaps(links as LinkData[]);
+
+  const bottomDockShadow = "0 10px 30px rgba(10,22,40,.12)";
+  const bottomPill: React.CSSProperties = {
+    background: C.white,
+    border: `1px solid ${C.border}`,
+    borderRadius: 12,
+    boxShadow: bottomDockShadow,
+  };
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.surface, position: "relative", overflow: "hidden" }}>
@@ -1422,27 +1419,85 @@ function Board({ onBack }: { onBack: () => void }) {
             style={{
               position: "absolute",
               left: 0,
-              right: 0,
+              right: collapsed.right ? PANEL_TAB : 0,
               bottom: 0,
-              transform: collapsed.bottom ? "translateY(100%)" : "translateY(0)",
               zIndex: 10,
-              pointerEvents: collapsed.bottom ? "none" : "auto",
+              padding: `0 clamp(8px, 1.5vw, 16px) 28px`,
+              pointerEvents: "auto",
+              boxSizing: "border-box",
             }}
           >
-            <div style={{ position: "relative", left: "50%", transform: "translateX(-50%)", display: "flex", gap: 8, background: C.white, padding: 8, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: "0 10px 30px rgba(10,22,40,.12)", width: "min(860px, 96%)", marginBottom: 20, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                data-panel-ui
-                aria-label="Hide add-card bar"
-                onClick={() => togglePanel("bottom")}
-                style={{ ...panelTab, width: PANEL_TAB, height: PANEL_TAB, flexShrink: 0, borderRadius: 6 }}
-              >▾</button>
-              <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "0 8px", fontSize: 13, color: C.navy, background: C.white }}>
-                {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
-              <input style={{ flex: 1, minWidth: 160, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }} placeholder="Type a pain point or use case, then Enter" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
-              <button style={btn.primarySm} onClick={submit}>Add</button>
-              <button style={btn.ghost} onClick={addBlankBox}>Add blank box</button>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: 12,
+                width: "100%",
+                justifyContent: collapsed.bottom ? "flex-end" : "stretch",
+              }}
+            >
+              <div
+                className="board-panel-transition"
+                style={{
+                  flex: collapsed.bottom ? "0 0 0" : 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  maxHeight: collapsed.bottom ? 0 : 200,
+                  opacity: collapsed.bottom ? 0 : 1,
+                  pointerEvents: collapsed.bottom ? "none" : "auto",
+                }}
+              >
+                <div
+                  style={{
+                    ...bottomPill,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="button"
+                    data-panel-ui
+                    aria-label="Hide add-card bar"
+                    onClick={() => togglePanel("bottom")}
+                    style={{ ...panelTab, width: PANEL_TAB, height: PANEL_TAB, flexShrink: 0, borderRadius: 6 }}
+                  >▾</button>
+                  <select
+                    value={theme}
+                    onChange={(e) => setTheme(e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "0 8px", fontSize: 13, color: C.navy, background: C.white, flexShrink: 0 }}
+                  >
+                    {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  </select>
+                  <input
+                    style={{ flex: "1 1 120px", minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }}
+                    placeholder="Type a pain point or use case, then Enter"
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                  />
+                  <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={submit}>Add</button>
+                  <button type="button" style={{ ...btn.ghost, flexShrink: 0 }} onClick={addBlankBox}>Add blank box</button>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  ...bottomPill,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "6px 8px",
+                  flexShrink: 0,
+                }}
+              >
+                <button type="button" style={btn.ghost} onClick={() => zoomStep(-0.15)} aria-label="Zoom out">−</button>
+                <span style={{ ...btn.ghost, cursor: "default", minWidth: 52, textAlign: "center", padding: "9px 10px" }}>{Math.round(zoom * 100)}%</span>
+                <button type="button" style={btn.ghost} onClick={() => zoomStep(0.15)} aria-label="Zoom in">+</button>
+                <button type="button" style={btn.ghost} onClick={resetView}>Reset</button>
+              </div>
             </div>
           </div>
 
@@ -1453,16 +1508,10 @@ function Board({ onBack }: { onBack: () => void }) {
               className="board-panel-transition"
               aria-label="Show add-card bar"
               onClick={() => togglePanel("bottom")}
-              style={{ ...panelTab, position: "absolute", bottom: 0, left: 24, width: 48, height: PANEL_TAB, borderRadius: "8px 8px 0 0", zIndex: 12 }}
+              style={{ ...panelTab, position: "absolute", bottom: 28, left: 24, width: 48, height: PANEL_TAB, borderRadius: "8px 8px 0 0", zIndex: 12 }}
             >▴</button>
           )}
 
-          <div data-board-ui style={{ position: "absolute", right: zoomRight, bottom: zoomBottom, display: "flex", alignItems: "center", gap: 4, zIndex: 10 }}>
-            <button style={btn.ghost} onClick={() => zoomStep(-0.15)} aria-label="Zoom out">−</button>
-            <span style={{ ...btn.ghost, cursor: "default", minWidth: 52, textAlign: "center", padding: "9px 10px" }}>{Math.round(zoom * 100)}%</span>
-            <button style={btn.ghost} onClick={() => zoomStep(0.15)} aria-label="Zoom in">+</button>
-            <button style={btn.ghost} onClick={resetView}>Reset</button>
-          </div>
         </div>
 
         <div className="board-panel-transition" style={{ width: collapsed.right ? 0 : RAIL_W, minWidth: collapsed.right ? 0 : RAIL_W, overflow: "hidden", flexShrink: 0, borderLeft: collapsed.right ? "none" : `1px solid ${C.border}` }}>
