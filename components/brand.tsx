@@ -16,12 +16,18 @@ export const themeOf = (id: string) => THEMES.find((t) => t.id === id) || THEMES
 
 const display = "var(--font-outfit), system-ui, sans-serif";
 
-// Logos render from /public/logos/*.svg. Replace those files with the official
-// assets — same filename, no code change. Falls back to a typographic mark.
+// Official lockups in /public/logos/ (served at /logos/*). Falls back to typographic marks on load error.
+const LOGO_HEIGHT = 24;
+const logoImgStyle = (scale: number): React.CSSProperties => ({
+  height: LOGO_HEIGHT * scale,
+  width: "auto",
+  display: "block",
+});
+
 export function SmartCoLogo({ scale = 1 }: { scale?: number }) {
   const [err, setErr] = useState(false);
   if (!err)
-    return <img src="/logos/smartco.svg" alt="SmartCo" style={{ height: 28 * scale, display: "block" }} onError={() => setErr(true)} />;
+    return <img src="/logos/smartco.svg" alt="SmartCo" style={logoImgStyle(scale)} onError={() => setErr(true)} />;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 9 * scale, fontFamily: display }}>
       <svg width={28 * scale} height={24 * scale} viewBox="0 0 30 26" aria-hidden>
@@ -37,7 +43,7 @@ export function SmartCoLogo({ scale = 1 }: { scale?: number }) {
 export function MUFGLogo({ scale = 1 }: { scale?: number }) {
   const [err, setErr] = useState(false);
   if (!err)
-    return <img src="/logos/mufg.svg" alt="MUFG" style={{ height: 26 * scale, display: "block" }} onError={() => setErr(true)} />;
+    return <img src="/logos/mufg.png" alt="MUFG" style={logoImgStyle(scale)} onError={() => setErr(true)} />;
   return (
     <span style={{ fontFamily: display, fontWeight: 800, fontSize: 19 * scale, letterSpacing: 1.5, color: C.navy, borderLeft: `3px solid ${C.coral}`, paddingLeft: 9 * scale }}>
       MUFG

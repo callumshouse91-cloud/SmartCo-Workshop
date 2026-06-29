@@ -35,7 +35,14 @@ const cardH = (c: { h?: number }) => c.h ?? CARD_H;
 const cardAccent = (c: { color?: string; theme: string }) => c.color ?? themeOf(c.theme).color;
 const FIT_MIN = 11;
 const FIT_MAX = 28;
+const EDIT_MIN_W = 320;
+const EDIT_MIN_H = 200;
+const DBL_CLICK_MS = 300;
+const DBL_CLICK_PX = 10;
 const sizeCapMax = (c: { size?: number }) => c.size ?? FIT_MAX;
+
+const cardDisplayW = (c: { w?: number }, editing: boolean) => (editing ? Math.max(cardW(c), EDIT_MIN_W) : cardW(c));
+const cardDisplayH = (c: { h?: number }, editing: boolean) => (editing ? Math.max(cardH(c), EDIT_MIN_H) : cardH(c));
 
 function fitFontSize(el: HTMLElement, maxFs: number, minFs = FIT_MIN): number {
   const cap = Math.min(maxFs, FIT_MAX);
@@ -75,7 +82,7 @@ function BoardCard({
   c, isEditing, isSelected, isDragging, isResizing, controlsOpen,
   editText, editRef,
   onDown, onResizeDown, onConnectDown, onToggleControls, onStartEdit,
-  onEditChange, onFinishEdit, onCancelEdit,
+  onEditChange, onFinishEdit, onCancelEdit, onCancelDrag,
   updateCard, duplicateCard, removeCard,
 }: {
   c: any;
@@ -94,16 +101,18 @@ function BoardCard({
   onEditChange: (v: string) => void;
   onFinishEdit: (id: string, draft: string) => void;
   onCancelEdit: (id: string) => void;
+  onCancelDrag: () => void;
   updateCard: (id: string, patch: Record<string, unknown>) => void;
   duplicateCard: (id: string) => void;
   removeCard: (id: string) => void;
 }) {
   const t = themeOf(c.theme);
   const accent = cardAccent(c);
-  const w = cardW(c);
-  const h = cardH(c);
+  const displayW = cardDisplayW(c, isEditing);
+  const displayH = cardDisplayH(c, isEditing);
   const maxFs = sizeCapMax(c);
   const textRef = useRef<HTMLDivElement>(null);
+  const lastPtr = useRef({ t: -10000, x: 0, y: 0 });
   const [fitSize, setFitSize] = useState(maxFs);
 
   const remeasure = useCallback(() => {
@@ -115,25 +124,51 @@ function BoardCard({
     } else {
       setFitSize(fitFontSize(el, maxFs));
     }
-  }, [isEditing, maxFs, editRef, c.text, w, h]);
+  }, [isEditing, maxFs, editRef, c.text, displayW, displayH]);
 
   useLayoutEffect(() => { remeasure(); }, [remeasure, editText]);
+
+  const handleCardPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (isEditing) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-card-action]") || target.closest("[data-handle]")) return;
+
+    const now = performance.now();
+    const dist = Math.hypot(e.clientX - lastPtr.current.x, e.clientY - lastPtr.current.y);
+    const isDbl = now - lastPtr.current.t < DBL_CLICK_MS && dist < DBL_CLICK_PX;
+    lastPtr.current = { t: now, x: e.clientX, y: e.clientY };
+
+    if (isDbl) {
+      onCancelDrag();
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* not captured yet */ }
+      if (target.closest("[data-card-header]") && !target.closest("button")) {
+        onToggleControls(c.id);
+      } else if (target.closest("[data-card-body]")) {
+        onStartEdit(c);
+      }
+      return;
+    }
+
+    onDown(e, c.id);
+  };
+
+  const sizeTransition = isDragging || isResizing ? "none" : "width 0.32s cubic-bezier(.2,.8,.2,1), height 0.32s cubic-bezier(.2,.8,.2,1)";
 
   return (
     <div
       data-card
       className={`board-card${isSelected ? " card-selected" : ""}${isEditing ? " card-editing" : ""}`}
-      style={{ position: "absolute", top: 0, left: 0, width: w, transform: `translate(${c.x}px, ${c.y}px)`, transition: isDragging || isResizing ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: isDragging || isSelected || isEditing ? 20 : 5 }}
+      style={{ position: "absolute", top: 0, left: 0, width: displayW, transform: `translate(${c.x}px, ${c.y}px)`, transition: isDragging || isResizing ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: isEditing ? 30 : isDragging || isSelected ? 20 : 5 }}
     >
       <div
         className="card-pop"
-        style={{ position: "relative", width: w, height: h, background: C.white, border: `1px solid ${C.border}`, borderTop: `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: isEditing ? "text" : "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
-        onPointerDown={(e) => onDown(e, c.id)}
+        style={{ position: "relative", width: displayW, height: displayH, transition: sizeTransition, background: C.white, border: `1px solid ${C.border}`, borderTop: `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: isEditing ? "text" : "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
+        onPointerDown={handleCardPointerDown}
       >
         <div
           data-card-header
           style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexShrink: 0, cursor: "default" }}
-          onDoubleClick={(e) => { e.stopPropagation(); onToggleControls(c.id); }}
         >
           <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
           {c.ai && <span style={tag.ai}>AI</span>}
@@ -168,7 +203,7 @@ function BoardCard({
           </div>
         )}
 
-        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div data-card-body style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
           {isEditing ? (
             <textarea
               ref={editRef}
@@ -186,7 +221,6 @@ function BoardCard({
             <div
               ref={textRef}
               style={{ fontSize: fitSize, lineHeight: 1.35, color: C.navy, height: "100%", overflow: "hidden", wordBreak: "break-word" }}
-              onDoubleClick={(e) => { e.stopPropagation(); onStartEdit(c); }}
             >{c.text}</div>
           )}
         </div>
@@ -493,9 +527,15 @@ function Board({ onBack }: { onBack: () => void }) {
     setControlsCardId((prev) => (prev === id ? null : id));
   };
 
+  const cancelDrag = () => setDrag(null);
+
   const onCanvasDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || editingId || connecting) return;
     const t = e.target as HTMLElement;
+    if (editingId) {
+      if (!t.closest("[data-card]")) finishEdit(editingId, editText);
+      return;
+    }
+    if (e.button !== 0 || connecting) return;
     if (t.closest("[data-board-ui]") || t.closest("[data-panel-ui]") || t.closest("[data-card]") || t.closest("[data-link-ui]")) return;
     setSelectedId(null);
     setSelectedLinkIdx(null);
@@ -669,7 +709,10 @@ function Board({ onBack }: { onBack: () => void }) {
     setBusy((b) => ({ ...b, ideas: false }));
   }
 
-  const center = (c: any) => ({ x: c.x + cardW(c) / 2, y: c.y + cardH(c) / 2 });
+  const center = (c: any) => ({
+    x: c.x + cardDisplayW(c, c.id === editingId) / 2,
+    y: c.y + cardDisplayH(c, c.id === editingId) / 2,
+  });
 
   const zoomBottom = collapsed.bottom ? 12 : 20;
   const zoomRight = collapsed.right ? PANEL_TAB + 8 : 16;
@@ -789,6 +832,7 @@ function Board({ onBack }: { onBack: () => void }) {
                 onEditChange={setEditText}
                 onFinishEdit={finishEdit}
                 onCancelEdit={cancelEdit}
+                onCancelDrag={cancelDrag}
                 updateCard={updateCard}
                 duplicateCard={duplicateCard}
                 removeCard={removeCard}
