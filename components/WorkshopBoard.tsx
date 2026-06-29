@@ -370,6 +370,7 @@ type ComposerState = {
 };
 
 const COMPOSER_Z = 10002;
+const COMPOSER_MENU_Z = COMPOSER_Z + 10;
 
 const chipStyle: React.CSSProperties = {
   fontSize: 9,
@@ -573,6 +574,7 @@ function PortaledSelect({
   onAddNew,
   optional,
   optionColors,
+  menuZIndex = CARD_MENU_Z,
 }: {
   label: string;
   value: string;
@@ -581,6 +583,7 @@ function PortaledSelect({
   onAddNew?: (v: string) => void;
   optional?: boolean;
   optionColors?: Record<string, string>;
+  menuZIndex?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -655,13 +658,20 @@ function PortaledSelect({
 
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => {
+    const onDoc = (e: Event) => {
       const t = e.target as Node;
       if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
       close();
     };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    const id = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", onDoc);
+      document.addEventListener("pointerdown", onDoc);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("pointerdown", onDoc);
+    };
   }, [open, close]);
 
   const itemBtn = (selected: boolean): React.CSSProperties => ({
@@ -684,13 +694,14 @@ function PortaledSelect({
     <div
       ref={menuRef}
       data-card-edit-menu
+      data-composer-select-menu={menuZIndex >= COMPOSER_Z ? true : undefined}
       role="listbox"
       style={{
         position: "fixed",
         left: pos.left,
         top: pos.top,
         width: pos.width,
-        zIndex: CARD_MENU_Z,
+        zIndex: menuZIndex,
         background: C.white,
         border: `1px solid ${C.border}`,
         borderRadius: 10,
@@ -698,9 +709,11 @@ function PortaledSelect({
         overflow: "hidden",
         maxHeight: 240,
         overflowY: "auto",
+        pointerEvents: "auto",
       }}
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
     >
       {adding ? (
         <div style={{ padding: 10 }}>
@@ -760,9 +773,14 @@ function PortaledSelect({
         <button
           ref={triggerRef}
           type="button"
+          data-composer-select-trigger={menuZIndex >= COMPOSER_Z ? true : undefined}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => (open ? close() : openMenu())}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (open) close();
+            else openMenu();
+          }}
           style={{
             ...fieldSelectStyle,
             display: "flex",
@@ -770,6 +788,7 @@ function PortaledSelect({
             gap: 6,
             cursor: "pointer",
             textAlign: "left",
+            pointerEvents: "auto",
           }}
         >
           {optionColors?.[value] && (
@@ -823,8 +842,10 @@ function CardComposerModal({
       aria-labelledby="card-composer-title"
       style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: COMPOSER_Z, padding: 20 }}
       onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      onPointerDown={(e) => { if (e.target === e.currentTarget) e.stopPropagation(); }}
     >
       <div
+        data-card-composer
         style={{
           background: C.white,
           borderRadius: 16,
@@ -838,6 +859,7 @@ function CardComposerModal({
         }}
         onMouseDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         <div style={{ padding: "20px 24px 0", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
@@ -902,6 +924,7 @@ function CardComposerModal({
               options={themes.map((t) => ({ value: t.id, label: t.label }))}
               optionColors={Object.fromEntries(themes.map((t) => [t.id, t.color]))}
               onChange={(v) => onThemeChange(v || null)}
+              menuZIndex={COMPOSER_MENU_Z}
             />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <PortaledSelect
@@ -910,6 +933,7 @@ function CardComposerModal({
                 options={dataPoints.map((d) => ({ value: d, label: d }))}
                 onChange={(v) => onDraftChange({ dataPoint: v })}
                 onAddNew={onAddDataPoint}
+                menuZIndex={COMPOSER_MENU_Z}
               />
               <div>
                 <PortaledSelect
@@ -922,6 +946,7 @@ function CardComposerModal({
                     else onDraftChange({ impact: v === HOURS_IMPACT_TYPE ? { type: v, hours: draft.impact?.hours ?? 1 } : { type: v } });
                   }}
                   onAddNew={onAddImpact}
+                  menuZIndex={COMPOSER_MENU_Z}
                 />
                 {draft.impact?.type === HOURS_IMPACT_TYPE && (
                   <input
@@ -2084,6 +2109,14 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     setConnectCursor(null);
   }, []);
 
+  useEffect(() => {
+    if (!composer) return;
+    setDrag(null);
+    setPanDrag(null);
+    setResize(null);
+    cancelConnecting();
+  }, [composer, cancelConnecting]);
+
   const toggleLinkDrawMode = useCallback(() => {
     setLinkDrawMode((on) => {
       if (on) cancelConnecting();
@@ -2619,7 +2652,14 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
         <div
           ref={canvasRef}
-          style={{ position: "relative", flex: 1, overflow: "hidden", touchAction: "none", cursor: linkDrawMode || connecting ? "crosshair" : panDrag ? "grabbing" : drag ? "grabbing" : "grab" }}
+          style={{
+            position: "relative",
+            flex: 1,
+            overflow: "hidden",
+            touchAction: "none",
+            cursor: composer ? "default" : linkDrawMode || connecting ? "crosshair" : panDrag ? "grabbing" : drag ? "grabbing" : "grab",
+            pointerEvents: composer ? "none" : "auto",
+          }}
           onPointerDown={onCanvasDown}
           onDoubleClick={onCanvasDblClick}
           onPointerMove={onMove}

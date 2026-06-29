@@ -370,12 +370,42 @@ const WHO_VB_W = 1250;
 const WHO_VB_H = 720;
 const WHO_CX = 625;
 const WHO_CY = 368;
-const WHO_R = 232;
-const WHO_STROKE = 40;
+const WHO_R = 242;
+const WHO_STROKE = 42;
 const WHO_ARC_SPAN = 108;
 const WHO_ARC_GAP = 12;
 const WHO_RING_INNER = WHO_R - WHO_STROKE / 2;
-const WHO_HEX_MARGIN = 20;
+const WHO_HEX_MARGIN = 16;
+/** Space reserved beneath each hex for the practice caption (SVG user units). */
+const WHO_LABEL_BELOW = 40;
+
+function honeycombLabelHalfWidth(hexR: number) {
+  return (Math.sqrt(3) * hexR * 0.98) / 2;
+}
+
+function honeycombClusterRadius(hexR: number) {
+  const offsets = honeycombOffsets(hexR);
+  const labelHalfW = honeycombLabelHalfWidth(hexR);
+  let extent = 0;
+  for (const { ox, oy } of offsets) {
+    const horizontal = Math.abs(ox) + hexR + labelHalfW;
+    const vertical = Math.abs(oy) + hexR + WHO_LABEL_BELOW;
+    extent = Math.max(extent, horizontal, vertical);
+  }
+  return extent;
+}
+
+function fitHoneycombRadius() {
+  const limit = WHO_RING_INNER - WHO_HEX_MARGIN;
+  let lo = 36;
+  let hi = 88;
+  while (hi - lo > 0.5) {
+    const mid = (lo + hi) / 2;
+    if (honeycombClusterRadius(mid) <= limit) lo = mid;
+    else hi = mid;
+  }
+  return Math.floor(lo);
+}
 
 const WHO_ARC_SEGMENTS = [
   { label: "ADVISORY", centerDeg: 0, color: C.coral, delay: "0.3s", arrowDelay: "0.45s" },
@@ -409,22 +439,6 @@ function honeycombOffsets(hexR: number) {
     { ox: 0, oy: dy / 2 },
     { ox: dx, oy: dy / 2 },
   ];
-}
-
-function maxHoneycombRadius(hexR: number) {
-  return Math.max(...honeycombOffsets(hexR).map((p) => Math.hypot(p.ox, p.oy))) + hexR;
-}
-
-function fitHoneycombRadius() {
-  const limit = WHO_RING_INNER - WHO_HEX_MARGIN;
-  let lo = 40;
-  let hi = 80;
-  while (hi - lo > 0.5) {
-    const mid = (lo + hi) / 2;
-    if (maxHoneycombRadius(mid) <= limit) lo = mid;
-    else hi = mid;
-  }
-  return Math.floor(lo);
 }
 
 const WHO_HEX_R = fitHoneycombRadius();
@@ -597,15 +611,17 @@ export function WhoWeAreSlide({
 
             {WHO_ARC_SEGMENTS.map((seg) => {
               const labelPt = whoRingPoint(WHO_CX, WHO_CY, WHO_R, seg.centerDeg);
+              const arcFontSize = "long" in seg && seg.long ? 16 : 18;
               return (
                 <text
                   key={`label-${seg.label}`}
                   x={labelPt.x}
                   y={labelPt.y}
-                  className={`who-ring-label${"long" in seg && seg.long ? " who-ring-label--long" : ""}`}
+                  className="who-ring-label"
                   fill={C.white}
                   fontFamily={display}
                   fontWeight={800}
+                  fontSize={arcFontSize}
                   textAnchor="middle"
                   dominantBaseline="middle"
                 >
@@ -617,19 +633,25 @@ export function WhoWeAreSlide({
             {practices.map((p) => {
               const hx = WHO_CX + p.ox;
               const hy = WHO_CY + p.oy;
-              const innerW = Math.sqrt(3) * WHO_HEX_R * 0.92;
-              const labelH = WHO_HEX_R * 0.72;
+              const labelW = Math.sqrt(3) * WHO_HEX_R * 1.05;
+              const captionY = WHO_HEX_R * 0.72;
               return (
                 <g key={p.key} transform={`translate(${hx.toFixed(1)}, ${hy.toFixed(1)})`}>
                   <g className="who-practice-hex" style={{ animationDelay: `${p.delay}s` }}>
                     <polygon points={whoHexPolygon(0, 0, WHO_HEX_R)} fill={C.blue} />
-                    <g transform={`translate(0,${(-WHO_HEX_R * 0.28).toFixed(1)})`}>
+                    <g transform="translate(0, -2)">
                       <PracticeIcon kind={p.key} />
                     </g>
-                    <foreignObject x={-innerW / 2} y={WHO_HEX_R * 0.08} width={innerW} height={labelH} xmlns="http://www.w3.org/1999/xhtml">
-                      <div className="who-hex-label">{p.label}</div>
-                    </foreignObject>
                   </g>
+                  <foreignObject
+                    x={-labelW / 2}
+                    y={captionY}
+                    width={labelW}
+                    height={WHO_LABEL_BELOW}
+                    xmlns="http://www.w3.org/1999/xhtml"
+                  >
+                    <div className="who-hex-caption">{p.label}</div>
+                  </foreignObject>
                 </g>
               );
             })}

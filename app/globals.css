@@ -1224,12 +1224,11 @@ button:disabled { opacity: .55; cursor: default; }
   100% { opacity: 1; transform: scale(1); }
 }
 .who-ring-label {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-}
-.who-ring-label--long {
-  font-size: 8px;
-  letter-spacing: 0.06em;
+  paint-order: stroke fill;
+  stroke: #0a1628;
+  stroke-width: 0.45px;
+  stroke-linejoin: round;
+  letter-spacing: 0.1em;
 }
 .who-practice-hex {
   transform-box: fill-box;
@@ -1242,23 +1241,21 @@ button:disabled { opacity: .55; cursor: default; }
   70% { opacity: 1; transform: scale(1.07); }
   100% { opacity: 1; transform: scale(1); }
 }
-.who-hex-label {
+.who-hex-caption {
   font-family: var(--font-outfit), system-ui, sans-serif;
-  font-size: clamp(5.5px, 0.68vw, 7.5px);
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.1;
-  color: #ffffff;
+  line-height: 1.25;
+  color: #0a1628;
   text-align: center;
   word-wrap: break-word;
   overflow-wrap: break-word;
-  hyphens: auto;
-  padding: 0 2px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
+  hyphens: none;
+  padding: 0 1px;
+  margin: 0;
+  display: block;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
 }
 .who-callout {
   position: absolute;
@@ -1580,7 +1577,6 @@ button:disabled { opacity: .55; cursor: default; }
   .context-challenge-text { font-size: clamp(9px, 1vw, 11px); }
   .intro-hex-body { font-size: clamp(8px, 0.9vw, 10px); }
   .who-we-are-title { font-size: clamp(18px, 2.6vw, 28px) !important; }
-  .who-hex-label { font-size: 6px; }
   .who-callout-title { font-size: clamp(7px, 0.85vw, 9px); }
   .who-callout-desc { font-size: clamp(6.5px, 0.78vw, 8px); }
   .who-integrated-text { font-size: clamp(6.5px, 0.78vw, 8px); }
