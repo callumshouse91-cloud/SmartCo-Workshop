@@ -2,10 +2,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { C, callAIResult, type AIProvider, type AISource } from "@/components/brand";
 import { useAsk } from "@/components/AskContext";
+import { InfoButton } from "@/components/InfoButton";
+import { buildAskPrompt } from "@/lib/prompts";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
-const ASK_SYSTEM =
-  "You are a helpful assistant inside the SmartCo workshop app. Answer the user's question clearly and concisely.";
 
 type AskModel = "claude" | "gemini" | "gpt";
 
@@ -30,25 +30,6 @@ const btn = {
 
 function needsVerifyNote(text: string): boolean {
   return /\b(pricing|price|cost|licen[cs]|roadmap|feature|mcp|integration|plan|tier|subscription|release|availability)\b/i.test(text);
-}
-
-function buildContent(messages: ChatMessage[], question: string, extraContext: string | null): string {
-  const recent = messages.slice(-6);
-  const parts: string[] = [];
-  if (recent.length) {
-    parts.push("Previous conversation:");
-    for (const m of recent) {
-      parts.push(`${m.role === "user" ? "User" : "Assistant"}: ${m.content}`);
-    }
-    parts.push("");
-  }
-  parts.push(`Current question: ${question}`);
-  if (extraContext?.trim()) {
-    parts.push("");
-    parts.push("Context from the app:");
-    parts.push(extraContext.trim());
-  }
-  return parts.join("\n");
 }
 
 function AnswerMeta({ msg }: { msg: ChatMessage }) {
@@ -135,11 +116,11 @@ export function AskPanel() {
     setLoading(true);
 
     const extra = includeContext && pageContext ? pageContext.getContext() : null;
-    const content = buildContent(messages, question, extra);
+    const { system, content } = buildAskPrompt(question, extra, messages);
     const search = model === "gemini" || model === "gpt";
 
     try {
-      const result = await callAIResult(ASK_SYSTEM, content, model as AIProvider, {
+      const result = await callAIResult(system, content, model as AIProvider, {
         search,
         timeoutMs: search ? 30000 : undefined,
       });
@@ -207,7 +188,23 @@ export function AskPanel() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-          <h2 style={{ fontFamily: display, fontSize: 18, fontWeight: 800, margin: 0, color: C.navy }}>Ask</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <h2 style={{ fontFamily: display, fontSize: 18, fontWeight: 800, margin: 0, color: C.navy }}>Ask</h2>
+            <InfoButton
+              title="Ask assistant"
+              description={
+                model === "claude"
+                  ? "A general-purpose assistant for delivery and workshop questions. Claude is selected — answers use model knowledge only (no live web search)."
+                  : `A general-purpose assistant for delivery and workshop questions. ${model === "gemini" ? "Gemini" : "GPT"} is selected — live web search is enabled when you send a message.`
+              }
+              note="Optional board or tooling context is appended when the include toggle is on. The last six messages are included for multi-turn chat."
+              prompt={() => buildAskPrompt(
+                input.trim() || "(your question)",
+                includeContext && pageContext ? pageContext.getContext() : null,
+                messages
+              )}
+            />
+          </div>
           <button type="button" aria-label="Close" onClick={() => setOpen(false)} style={{ ...btn.ghost, padding: "6px 12px", fontSize: 18, lineHeight: 1 }}>×</button>
         </div>
 

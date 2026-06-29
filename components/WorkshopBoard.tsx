@@ -4,6 +4,13 @@ import Link from "next/link";
 import { C, THEMES, themeOf, themeLabel, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider } from "./brand";
 import { AskButton } from "@/components/AskPanel";
 import { useRegisterAskContext } from "@/components/AskContext";
+import { InfoButton } from "@/components/InfoButton";
+import {
+  buildComparePrompt,
+  buildLinkagesPrompt,
+  buildReviewPrompt,
+  buildSuggestPrompt,
+} from "@/lib/prompts";
 import { DECK, isImageSlide } from "./deck";
 import { renderDeckSlide, slideNeedsScroll } from "./IntroSlides";
 
@@ -1149,17 +1156,13 @@ function Board({ onBack }: { onBack: () => void }) {
     }));
   };
 
-  const reviewPrompt = () => {
-    const sys = "You are a senior delivery/PMO consultant observing a live MUFG discovery workshop. Given captured pain points across three themes, return 3 sharp insights as plain-text lines, each starting with '— '. Cover: the strongest emerging pattern, the single biggest AI opportunity, and one gap worth probing. No preamble, no headings.";
-    const body = cards.map((c) => `[${themeLabel(c.theme)}] ${c.text}`).join("\n");
-    return { sys, body };
-  };
+  const reviewPrompt = () => buildReviewPrompt(cards);
 
   async function runReview() {
     if (busy.review || !cards.length) return;
     setBusy((b) => ({ ...b, review: true }));
-    const { sys, body } = reviewPrompt();
-    const out = await callAI(sys, body, provider);
+    const { system, content } = reviewPrompt();
+    const out = await callAI(system, content, provider);
     setInsight(out || "— AI review unavailable right now. Capture and save are still working normally.");
     setBusy((b) => ({ ...b, review: false }));
   }
@@ -1170,10 +1173,10 @@ function Board({ onBack }: { onBack: () => void }) {
     setBusy((b) => ({ ...b, compare: true }));
     const loading = { text: "", loading: true };
     setCompareResults({ claude: { ...loading }, gemini: { ...loading }, gpt: { ...loading } });
-    const { sys, body } = reviewPrompt();
+    const { system, content } = buildComparePrompt(cards);
     const results = await Promise.all(
       AI_PROVIDERS.map(async ({ id }) => {
-        const { text, error } = await callAIResult(sys, body, id);
+        const { text, error } = await callAIResult(system, content, id);
         return { id, text: text || (error ? `— ${error}` : "— No response"), error };
       })
     );
@@ -1186,9 +1189,8 @@ function Board({ onBack }: { onBack: () => void }) {
   async function mapLinks() {
     if (busy.links || cards.length < 2) return;
     setBusy((b) => ({ ...b, links: true }));
-    const sys = 'Return ONLY a JSON array, no prose. Identify pairs of related captured items. Each element: {"a": id, "b": id, "reason": "<=6 words"}. Use only the provided ids. Max 6 pairs.';
-    const list = cards.map((c) => ({ id: c.id, text: c.text, theme: c.theme ?? "uncategorised" }));
-    const out = await callAI(sys, JSON.stringify(list), provider);
+    const { system, content } = buildLinkagesPrompt(cards);
+    const out = await callAI(system, content, provider);
     const arr = parseJSON(out);
     if (Array.isArray(arr)) {
       const ids = new Set(cards.map((c) => c.id));
@@ -1208,9 +1210,8 @@ function Board({ onBack }: { onBack: () => void }) {
   async function suggestIdeas() {
     if (busy.ideas) return;
     setBusy((b) => ({ ...b, ideas: true }));
-    const sys = 'Return ONLY a JSON array of 3 objects, no prose. Each: {"theme": "accelerate"|"manual"|"quality", "text": "<concise AI/delivery use-case idea, <=12 words>"}. Base them on the captured pains.';
-    const body = cards.map((c) => `[${themeLabel(c.theme)}] ${c.text}`).join("\n");
-    const out = await callAI(sys, body || "No cards yet — suggest generic delivery AI use cases.", provider);
+    const { system, content } = buildSuggestPrompt(cards);
+    const out = await callAI(system, content, provider);
     const arr = parseJSON(out);
     if (Array.isArray(arr)) arr.slice(0, 3).forEach((it: any, k: number) => {
       const th = THEMES.some((t) => t.id === it.theme) ? it.theme : "accelerate";
@@ -1248,6 +1249,10 @@ function Board({ onBack }: { onBack: () => void }) {
             <SmartCoLogo scale={0.85} />
             <span style={{ color: C.border }}>×</span>
             <MUFGLogo scale={0.85} />
+            <InfoButton
+              title="Workshop board"
+              description="Capture pains and ideas on a themed whiteboard. Drag cards, draw links between them, and edit inline. Your board autosaves to Supabase every few seconds, with localStorage as an offline fallback."
+            />
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={provider} onChange={(e) => setProvider(e.target.value as AIProvider)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 10px", fontSize: 13, color: C.navy, background: C.white, fontWeight: 600 }}>
@@ -1255,9 +1260,33 @@ function Board({ onBack }: { onBack: () => void }) {
             </select>
             <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
             <AskButton />
-            <button style={btn.ai(C.yellow)} onClick={compareModels} disabled={busy.compare || !cards.length}>{busy.compare ? "Comparing…" : "Compare models"}</button>
-            <button style={btn.ai(C.blue)} onClick={mapLinks} disabled={busy.links}>{busy.links ? "Mapping…" : "Map linkages with AI"}</button>
-            <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use cases"}</button>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <button style={btn.ai(C.yellow)} onClick={compareModels} disabled={busy.compare || !cards.length}>{busy.compare ? "Comparing…" : "Compare models"}</button>
+              <InfoButton
+                align="right"
+                title="Compare models"
+                description="Sends the same prompt to Claude, Gemini, and GPT in parallel and shows the three answers side by side for comparison."
+                prompt={() => buildComparePrompt(cards)}
+              />
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <button style={btn.ai(C.blue)} onClick={mapLinks} disabled={busy.links}>{busy.links ? "Mapping…" : "Map linkages with AI"}</button>
+              <InfoButton
+                align="right"
+                title="Map linkages with AI"
+                description="Analyses the cards on the board and draws links between related items. Returns pairs as JSON and adds them to the canvas."
+                prompt={() => buildLinkagesPrompt(cards)}
+              />
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use cases"}</button>
+              <InfoButton
+                align="right"
+                title="Suggest use cases"
+                description="Generates three AI/delivery use-case ideas from the captured pains and adds them as new cards on the board."
+                prompt={() => buildSuggestPrompt(cards)}
+              />
+            </span>
             <button style={btn.ai(C.navy)} onClick={arrange}>Arrange by theme</button>
             <button style={btn.primarySm} onClick={() => setShowPack(true)}>Takeaway pack</button>
           </div>
@@ -1447,7 +1476,15 @@ function Board({ onBack }: { onBack: () => void }) {
             >›</button>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingLeft: PANEL_TAB + 4 }}>
               <span style={{ fontWeight: 700, color: C.navy, fontFamily: display }}>AI insight</span>
-              <span style={{ color: C.navy, fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: busy.review ? C.yellow : C.mint }}>{busy.review ? "reviewing…" : "live"}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: C.navy, fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: busy.review ? C.yellow : C.mint }}>{busy.review ? "reviewing…" : "live"}</span>
+                <InfoButton
+                  align="right"
+                  title="Refresh review"
+                  description="Watches the cards on the board and generates three live insights — the strongest pattern, the biggest AI opportunity, and one gap to probe. Uses the model selected in the header."
+                  prompt={() => buildReviewPrompt(cards)}
+                />
+              </div>
             </div>
             <div style={{ marginTop: 14, flex: 1, overflow: "auto" }}>
               {insight ? insight.split("\n").filter(Boolean).map((line, k) => (

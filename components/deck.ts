@@ -263,12 +263,12 @@ export const DECK: DeckSlide[] = [
       },
       {
         sector: "Financial services / Post-trade",
-        maturity: "Advanced",
-        data: "Strong, well-structured data; AI-literate teams",
+        maturity: "Advanced (4 of 5 dots filled)",
+        data: "Strong data and reporting already in place; ready for a predictive layer",
         doing:
-          "AI portfolio reporting across the change book + automated regulatory horizon scanning, so risk and reg change surface early",
+          "An intelligence layer on top of the change portfolio — predictive insights and automated triggers that surface risk, slippage and regulatory change before it lands, rather than reporting it after the fact",
         length: "Discovery → rolling POCs (~4 months, ongoing)",
-        value: "Value inside the POC cycle — automation live, manual PMO effort cut",
+        value: "Shift from reactive reporting to early-warning — issues caught before they escalate",
       },
       {
         sector: "Consumer goods / Divestiture programme",
@@ -281,11 +281,13 @@ export const DECK: DeckSlide[] = [
       },
       {
         sector: "Financial services / Universal bank",
-        maturity: "Emerging",
+        maturity: "Emerging (2 of 5 dots filled)",
         data: "Workforce and location data fragmented across systems",
-        doing: "AI workforce and location decisioning model to support senior resourcing strategy",
-        length: "Workshop-led engagement (~4 weeks)",
-        value: "Structured, data-driven basis for calls previously made on judgement",
+        doing:
+          "Workshop-led engagement on AI workforce and location decisioning, with a proposition to become their programme delivery partner for the next 12 months",
+        length: "Workshop → 12-month programme partnership (proposed)",
+        value:
+          "Structured, data-driven basis for resourcing calls previously made on judgement, and a path to an ongoing partnership",
       },
       {
         sector: "Financial services / Asset management",
@@ -297,11 +299,12 @@ export const DECK: DeckSlide[] = [
       },
       {
         sector: "Financial services / Insurance",
-        maturity: "Medium",
-        data: "Good operational data, no predictive layer",
-        doing: "AI-assisted risk and assurance reporting across the change portfolio",
-        length: "Discovery → POC (~3 months)",
-        value: "Early-warning risk surfacing; reduced manual assurance load",
+        maturity: "Medium (3 of 5 dots filled)",
+        data: "Good operational data, fragmented procurement and operating model",
+        doing:
+          "AI procurement overhaul — redesigning the procurement process and rebuilding the target operating model around AI",
+        length: "Discovery → process + TOM rebuild (~3 months)",
+        value: "Leaner, AI-enabled procurement and a TOM fit for an AI operating model",
       },
     ],
     signalTitle: "THE SIGNAL · £400k",

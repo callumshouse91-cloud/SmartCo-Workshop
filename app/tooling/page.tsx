@@ -4,6 +4,8 @@ import Link from "next/link";
 import { C, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON } from "@/components/brand";
 import { AskButton } from "@/components/AskPanel";
 import { useRegisterAskContext } from "@/components/AskContext";
+import { InfoButton } from "@/components/InfoButton";
+import { buildToolingResearchPrompt } from "@/lib/prompts";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
 const SESSION_ID = "tooling-landscape";
@@ -57,15 +59,6 @@ const GAPS = [
   "No AI interrogating the delivery data across them",
   "Dashboards, status packs and governance produced manually over a 46-document set",
 ];
-
-const RESEARCH_SYS =
-  "You are a technology research analyst briefing a bank delivery team. " +
-  "Provide current, sourced research on: AI features, MCP support, pricing, roadmap/recent changes — " +
-  "strongly preferring official vendor pages, pricing pages, release notes, API docs, GitHub repos, and support docs. " +
-  "Return ONLY valid JSON (no markdown) with exactly these string keys: " +
-  '"aiCapabilities" (AI features, roadmap, what is announced), "mcpIntegrations" (MCP support, APIs, integration ecosystem), ' +
-  '"pricing" (licensing model and rough price bands), "marketChanges" (recent launches, acquisitions, competitive moves). ' +
-  "Each value: 2–4 concise sentences citing what you found. If uncertain, say so.";
 
 const scopeColor = (s: string) => (s === "Firm-wide" ? C.mint : C.blue);
 
@@ -196,10 +189,16 @@ function ToolCard({
           {tool.pain && (
             <div style={{ fontSize: 13, color: "#7A8499", marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>{tool.pain}</div>
           )}
-          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
             <button style={btn.ai(C.blue)} onClick={() => onResearch(tool.id)} disabled={research?.loading}>
               {research?.loading ? "Researching…" : "Research with AI"}
             </button>
+            <InfoButton
+              title="Research with AI"
+              description="Runs live web research on this tool using Gemini or GPT (selected in the page header). Returns a structured briefing with sources when grounding succeeds."
+              note="Verify pricing, feature availability, MCP support and roadmap claims against the cited vendor source before quoting externally."
+              prompt={() => buildToolingResearchPrompt(tool)}
+            />
             {research?.claudeHint && (
               <div style={{ width: "100%", fontSize: 12, color: C.navy, padding: "8px 10px", background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` }}>
                 Live search needs Gemini or GPT — Claude returns model-only knowledge.{" "}
@@ -335,13 +334,9 @@ export default function ToolingPage() {
     });
   };
 
-  const researchPrompt = (tool: Tool) =>
-    `Research the enterprise tool "${tool.name}" (${tool.cat}, ${tool.scope} scope). Used for: ${tool.use}.` +
-    (tool.pain ? ` Known pain: ${tool.pain}.` : "") +
-    " Focus on current AI features, MCP/API integration support, pricing/licensing, and recent roadmap or product changes. Prefer official vendor documentation and pricing pages.";
-
   const runResearchForProvider = useCallback(async (tool: Tool, provider: "gemini" | "gpt") => {
-    const result = await callAIResult(RESEARCH_SYS, researchPrompt(tool), provider, { search: true, timeoutMs: 30000 });
+    const { system, content } = buildToolingResearchPrompt(tool);
+    const result = await callAIResult(system, content, provider, { search: true, timeoutMs: 30000 });
     return parseBriefing(result);
   }, []);
 
