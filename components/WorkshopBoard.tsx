@@ -2,7 +2,10 @@
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import Link from "next/link";
 import { C, THEMES, themeOf, themeLabel, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider } from "./brand";
-import { DECK } from "./deck";
+import { AskButton } from "@/components/AskPanel";
+import { useRegisterAskContext } from "@/components/AskContext";
+import { DECK, isImageSlide } from "./deck";
+import { renderDeckSlide, slideNeedsScroll } from "./IntroSlides";
 
 const CARD_W = 216;
 const CARD_H = 104;
@@ -431,12 +434,6 @@ export default function WorkshopBoard() {
   );
 }
 
-const INTRO_PROMPTS = [
-  "Where does delivery slow down?",
-  "Where's the manual effort sitting?",
-  "What breaks confidence in delivery?",
-];
-
 const INTRO_NETWORK_NODES: { x: number; y: number }[] = [
   { x: 12, y: 18 }, { x: 28, y: 12 }, { x: 44, y: 22 }, { x: 58, y: 14 }, { x: 72, y: 26 },
   { x: 18, y: 38 }, { x: 35, y: 42 }, { x: 52, y: 36 }, { x: 68, y: 44 }, { x: 82, y: 34 },
@@ -487,11 +484,16 @@ function IntroAmbient() {
   );
 }
 
-function IntroTitle({ title }: { title: string }) {
-  const parts = title.split(/(\s+|×)/).filter((p) => p.length > 0);
-  return (
-    <h1 className="intro-title">
-      {parts.map((part, k) => {
+function Intro({ onEnter }: { onEnter: () => void }) {
+  const [i, setI] = useState(0);
+  const s = DECK[i];
+  const last = i === DECK.length - 1;
+  const imageSlide = isImageSlide(s);
+  const isText = !imageSlide;
+  const scrollable = isText && slideNeedsScroll(s);
+  const heroTitle = (
+    <h1 className="intro-title" style={{ margin: 0 }}>
+      {["SmartCo", " × ", "MUFG", " — AI & Delivery Workshop"].map((part, k) => {
         const isX = part.trim() === "×";
         return (
           <span
@@ -505,105 +507,87 @@ function IntroTitle({ title }: { title: string }) {
       })}
     </h1>
   );
-}
-
-function Intro({ onEnter }: { onEnter: () => void }) {
-  const [i, setI] = useState(0);
-  const last = i === DECK.length - 1;
-  const s = DECK[i];
-  const isText = !s.image;
-  const isHero = isText && i === 0;
 
   return (
-    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", background: `linear-gradient(160deg, ${C.white} 0%, ${C.surface} 100%)`, padding: "28px 40px", overflow: "hidden" }}>
+    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", background: `linear-gradient(160deg, ${C.white} 0%, ${C.surface} 100%)`, padding: "28px clamp(16px, 4vw, 40px)", overflow: "hidden" }}>
       {isText ? <IntroAmbient /> : <Corner />}
 
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative", flexShrink: 0 }}>
         <div className={isText ? "intro-enter intro-logo-left" : undefined}>
           <SmartCoLogo />
         </div>
-        <div className={isText ? "intro-enter intro-logo-right" : undefined}>
-          <MUFGLogo />
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            type="button"
+            className={isText ? "intro-enter" : undefined}
+            style={{ ...btn.ghost, padding: "7px 12px", fontSize: 12, animationDelay: "0.15s" }}
+            onClick={onEnter}
+          >
+            Enter workshop board
+          </button>
+          <div className={isText ? "intro-enter intro-logo-right" : undefined}>
+            <MUFGLogo />
+          </div>
         </div>
       </header>
 
-      {s.image ? (
-        <div key={i} className="enter-up" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2 }}>
+      {imageSlide ? (
+        <div key={i} className="enter-up" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2, minHeight: 0 }}>
           <img src={s.image} alt={`Slide ${i + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, boxShadow: "0 18px 50px rgba(10,22,40,.14)" }} />
         </div>
       ) : (
-        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", maxWidth: 760, zIndex: 2, position: "relative" }}>
-          {s.eyebrow && (
-            <div className="intro-enter intro-eyebrow" style={{ textTransform: "uppercase", letterSpacing: 3, fontSize: 12, fontWeight: 700, color: C.blue, marginBottom: 14 }}>
-              {s.eyebrow}
-            </div>
-          )}
-          {s.title && <IntroTitle title={s.title} />}
-          {s.body && (
-            <p className="intro-enter intro-body" style={{ fontSize: 20, lineHeight: 1.5, color: C.body, marginTop: 18, maxWidth: 620 }}>
-              {s.body}
-            </p>
-          )}
-          {isHero && (
-            <>
-              <div className="intro-enter intro-ai-badge">
-                <span className="intro-live-dot" aria-hidden />
-                <span>Powered by live AI — Claude · Gemini · GPT</span>
-              </div>
-              <div className="intro-enter intro-prompts intro-prompt-rotate" aria-live="polite">
-                {INTRO_PROMPTS.map((prompt) => (
-                  <span key={prompt}>{prompt}</span>
-                ))}
-              </div>
-            </>
-          )}
-          {s.chips && (
-            <div style={{ display: "flex", gap: 12, marginTop: 26, flexWrap: "wrap" }}>
-              {s.chips.map((c, k) => (
-                <span
-                  key={c.id}
-                  className="intro-enter intro-chip"
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 9,
-                    padding: "9px 16px",
-                    borderRadius: 999,
-                    border: `1.5px solid ${c.color}`,
-                    background: C.white,
-                    fontWeight: 600,
-                    fontSize: 14,
-                    animationDelay: `${0.58 + k * 0.12}s`,
-                  }}
-                >
-                  <span style={{ width: 8, height: 8, borderRadius: 8, background: c.color }} /> {c.label}
-                </span>
-              ))}
-            </div>
-          )}
+        <div
+          key={i}
+          className={scrollable ? "intro-scroll" : undefined}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: scrollable ? "flex-start" : "center",
+            maxWidth: scrollable ? 960 : 760,
+            width: "100%",
+            margin: scrollable ? "12px auto 0" : undefined,
+            zIndex: 2,
+            position: "relative",
+            minHeight: 0,
+          }}
+        >
+          {renderDeckSlide(s, onEnter, heroTitle)}
         </div>
       )}
 
-      {last && s.cta && (
-        <div className={isText ? "intro-enter intro-cta-wrap" : undefined} style={{ position: "absolute", right: 40, bottom: 90, zIndex: 3 }}>
-          <button
-            className={isText ? "intro-cta" : "enter-up"}
-            style={btn.primary}
-            onClick={onEnter}
-          >
-            {s.cta}
-            {isText && <span className="intro-cta-arrow" aria-hidden>→</span>}
-            {!isText && " →"}
-          </button>
+      {imageSlide && s.cta && last && (
+        <div className="enter-up" style={{ position: "absolute", right: 40, bottom: 90, zIndex: 3 }}>
+          <button style={btn.primary} onClick={onEnter}>{s.cta} →</button>
         </div>
       )}
 
-      <footer style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative" }}>
-        <button style={btn.ghost} onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
-        <div style={{ display: "flex", gap: 8 }}>
-          {DECK.map((_, k) => <span key={k} style={{ width: 8, height: 8, borderRadius: 8, background: k === i ? C.blue : C.border }} />)}
+      <footer style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative", flexShrink: 0, paddingTop: 12 }}>
+        <button type="button" style={btn.ghost} onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", maxWidth: "60%" }}>
+          {DECK.map((_, k) => (
+            <button
+              key={k}
+              type="button"
+              aria-label={`Go to slide ${k + 1}`}
+              onClick={() => setI(k)}
+              style={{
+                width: k === i ? 10 : 8,
+                height: k === i ? 10 : 8,
+                borderRadius: 8,
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                background: k === i ? C.blue : C.border,
+              }}
+            />
+          ))}
         </div>
-        {!last ? <button style={btn.ghost} onClick={() => setI((v) => Math.min(DECK.length - 1, v + 1))}>Next</button> : <span style={{ width: 64 }} />}
+        {!last ? (
+          <button type="button" style={btn.ghost} onClick={() => setI((v) => Math.min(DECK.length - 1, v + 1))}>Next</button>
+        ) : (
+          <span style={{ width: 64 }} />
+        )}
       </footer>
     </div>
   );
@@ -717,6 +701,24 @@ function Board({ onBack }: { onBack: () => void }) {
   const cards = activeBoard?.cards ?? [];
   const links = activeBoard?.links ?? [];
   const insight = activeBoard?.insight ?? "";
+
+  const boardCtxRef = useRef({ boards, activeId });
+  boardCtxRef.current = { boards, activeId };
+  useRegisterAskContext({
+    label: "Include current board",
+    getContext: () => {
+      const { boards: bs, activeId: aid } = boardCtxRef.current;
+      const board = bs.find((b) => b.id === aid) ?? bs[0];
+      if (!board) return null;
+      const lines = (board.cards || []).map((c: { theme?: string | null; text: string }) =>
+        `[${themeLabel(c.theme)}] ${c.text}`
+      );
+      let out = `Board: ${board.name}`;
+      if (lines.length) out += `\n${lines.join("\n")}`;
+      if (board.insight?.trim()) out += `\n\nInsight:\n${board.insight}`;
+      return out;
+    },
+  });
 
   const setCards = useCallback((updater: React.SetStateAction<any[]>) => {
     setBoards((bs) => bs.map((b) => {
@@ -1252,6 +1254,7 @@ function Board({ onBack }: { onBack: () => void }) {
               {AI_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
             <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
+            <AskButton />
             <button style={btn.ai(C.yellow)} onClick={compareModels} disabled={busy.compare || !cards.length}>{busy.compare ? "Comparing…" : "Compare models"}</button>
             <button style={btn.ai(C.blue)} onClick={mapLinks} disabled={busy.links}>{busy.links ? "Mapping…" : "Map linkages with AI"}</button>
             <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use cases"}</button>

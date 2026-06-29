@@ -2,13 +2,15 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { C, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON } from "@/components/brand";
+import { AskButton } from "@/components/AskPanel";
+import { useRegisterAskContext } from "@/components/AskContext";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
 const SESSION_ID = "tooling-landscape";
 const STORE_KEY = "smartco-tooling-landscape";
 
 type ToolScope = "Platform" | "Firm-wide";
-type ResearchModel = "gemini" | "gpt" | "both";
+type ResearchModel = "claude" | "gemini" | "gpt" | "both";
 
 type Tool = {
   id: string;
@@ -25,13 +27,14 @@ type Briefing = {
   pricing: string;
   marketChanges: string;
   grounded: boolean;
-  sources: { title?: string; url: string }[];
+  sources: { title: string; url: string }[];
   error?: string;
 };
 
 type ToolResearch = {
   expanded: boolean;
   loading: boolean;
+  claudeHint?: boolean;
   gemini?: Briefing;
   gpt?: Briefing;
 };
@@ -56,11 +59,13 @@ const GAPS = [
 ];
 
 const RESEARCH_SYS =
-  "You are a technology research analyst briefing a bank delivery team. Use web search when available for current 2025–2026 facts. " +
+  "You are a technology research analyst briefing a bank delivery team. " +
+  "Provide current, sourced research on: AI features, MCP support, pricing, roadmap/recent changes — " +
+  "strongly preferring official vendor pages, pricing pages, release notes, API docs, GitHub repos, and support docs. " +
   "Return ONLY valid JSON (no markdown) with exactly these string keys: " +
   '"aiCapabilities" (AI features, roadmap, what is announced), "mcpIntegrations" (MCP support, APIs, integration ecosystem), ' +
   '"pricing" (licensing model and rough price bands), "marketChanges" (recent launches, acquisitions, competitive moves). ' +
-  "Each value: 2–4 concise sentences. If uncertain, say so.";
+  "Each value: 2–4 concise sentences citing what you found. If uncertain, say so.";
 
 const scopeColor = (s: string) => (s === "Firm-wide" ? C.mint : C.blue);
 
@@ -71,7 +76,7 @@ const btn = {
   danger: { background: C.white, color: C.coral, border: `1px solid ${C.border}`, padding: "6px 10px", borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: "pointer" } as React.CSSProperties,
 };
 
-function parseBriefing(result: { text: string; error?: string; grounded?: boolean; sources?: { title?: string; url: string }[] }): Briefing {
+function parseBriefing(result: { text: string; error?: string; grounded: boolean; sources: { title: string; url: string }[] }): Briefing {
   const parsed = parseJSON(result.text);
   if (parsed && typeof parsed === "object") {
     return {
@@ -106,11 +111,21 @@ function BriefingPanel({ briefing, label }: { briefing: Briefing; label: string 
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ fontWeight: 700, fontSize: 12, color: C.navy, marginBottom: 8, fontFamily: display }}>{label}</div>
-      {!briefing.grounded && (
-        <div style={{ fontSize: 11, color: C.coral, fontWeight: 600, marginBottom: 8, padding: "6px 10px", background: C.surface, borderRadius: 6, border: `1px solid ${C.border}` }}>
-          Unverified — from model knowledge, not live search
-        </div>
-      )}
+      <div style={{
+        fontSize: 11,
+        fontWeight: 600,
+        marginBottom: 8,
+        padding: "6px 10px",
+        background: briefing.grounded ? "#E8F5EE" : C.surface,
+        borderRadius: 6,
+        border: `1px solid ${briefing.grounded ? C.mint : C.border}`,
+        color: briefing.grounded ? "#1A6B45" : C.coral,
+      }}>
+        {briefing.grounded ? "Live web search" : "UNVERIFIED — model knowledge only"}
+      </div>
+      <p style={{ fontSize: 11, color: "#7A8499", margin: "0 0 10px", lineHeight: 1.45 }}>
+        Verify pricing, feature availability, MCP support and roadmap claims against the cited vendor source before quoting externally.
+      </p>
       {sections.map((s) => (
         <div key={s.key} style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 3 }}>{s.key}</div>
@@ -134,7 +149,7 @@ function BriefingPanel({ briefing, label }: { briefing: Briefing; label: string 
 }
 
 function ToolCard({
-  tool, research, researchModel, onEdit, onDelete, onResearch, onToggleExpand,
+  tool, research, researchModel, onEdit, onDelete, onResearch, onResearchGemini, onToggleExpand,
 }: {
   tool: Tool;
   research?: ToolResearch;
@@ -142,6 +157,7 @@ function ToolCard({
   onEdit: (tool: Tool) => void;
   onDelete: (id: string) => void;
   onResearch: (id: string) => void;
+  onResearchGemini: (id: string) => void;
   onToggleExpand: (id: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -184,6 +200,14 @@ function ToolCard({
             <button style={btn.ai(C.blue)} onClick={() => onResearch(tool.id)} disabled={research?.loading}>
               {research?.loading ? "Researching…" : "Research with AI"}
             </button>
+            {research?.claudeHint && (
+              <div style={{ width: "100%", fontSize: 12, color: C.navy, padding: "8px 10px", background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                Live search needs Gemini or GPT — Claude returns model-only knowledge.{" "}
+                <button type="button" style={{ ...btn.ghost, padding: "4px 10px", fontSize: 12, marginLeft: 4 }} onClick={() => onResearchGemini(tool.id)}>
+                  Run on Gemini
+                </button>
+              </div>
+            )}
             {(research?.gemini || research?.gpt) && (
               <button style={btn.ghost} onClick={() => onToggleExpand(tool.id)}>
                 {research?.expanded ? "Hide briefing" : "Show briefing"}
@@ -194,14 +218,11 @@ function ToolCard({
           </div>
           {research?.expanded && (research.gemini || research.gpt) && (
             <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
-              <p style={{ fontSize: 11, color: "#7A8499", margin: "0 0 12px", fontStyle: "italic" }}>
-                AI-generated research — verify before quoting to the client.
-              </p>
-              <div style={{ display: "flex", gap: 16, flexDirection: researchModel === "both" ? "row" : "column", flexWrap: "wrap" }}>
-                {(researchModel === "gemini" || researchModel === "both") && research.gemini && (
+              <div style={{ display: "flex", gap: 16, flexDirection: (research.gemini && research.gpt) ? "row" : "column", flexWrap: "wrap" }}>
+                {research.gemini && (
                   <BriefingPanel briefing={research.gemini} label="Gemini" />
                 )}
-                {(researchModel === "gpt" || researchModel === "both") && research.gpt && (
+                {research.gpt && (
                   <BriefingPanel briefing={research.gpt} label="GPT" />
                 )}
               </div>
@@ -233,6 +254,17 @@ export default function ToolingPage() {
   const [showCompare, setShowCompare] = useState(false);
   const [compareTool, setCompareTool] = useState<Tool | null>(null);
   const loaded = useRef(false);
+  const toolsRef = useRef(tools);
+  toolsRef.current = tools;
+
+  useRegisterAskContext({
+    label: "Include tooling list",
+    getContext: () => {
+      const list = toolsRef.current;
+      if (!list.length) return "No tools in the landscape yet.";
+      return list.map((t) => `${t.name} (${t.scope}, ${t.cat}) — ${t.use}${t.pain ? ` | Pain: ${t.pain}` : ""}`).join("\n");
+    },
+  });
 
   const [form, setForm] = useState({ name: "", cat: "", scope: "Platform" as ToolScope, use: "" });
 
@@ -305,40 +337,47 @@ export default function ToolingPage() {
 
   const researchPrompt = (tool: Tool) =>
     `Research the enterprise tool "${tool.name}" (${tool.cat}, ${tool.scope} scope). Used for: ${tool.use}.` +
-    (tool.pain ? ` Known pain: ${tool.pain}.` : "");
+    (tool.pain ? ` Known pain: ${tool.pain}.` : "") +
+    " Focus on current AI features, MCP/API integration support, pricing/licensing, and recent roadmap or product changes. Prefer official vendor documentation and pricing pages.";
 
   const runResearchForProvider = useCallback(async (tool: Tool, provider: "gemini" | "gpt") => {
-    const result = await callAIResult(RESEARCH_SYS, researchPrompt(tool), provider, { search: true });
+    const result = await callAIResult(RESEARCH_SYS, researchPrompt(tool), provider, { search: true, timeoutMs: 30000 });
     return parseBriefing(result);
   }, []);
 
-  const researchTool = async (toolId: string) => {
+  const researchTool = async (toolId: string, forceProvider?: "gemini" | "gpt") => {
     const tool = tools.find((t) => t.id === toolId);
     if (!tool) return;
 
-    if (researchModel === "both") {
+    if (!forceProvider && researchModel === "claude") {
+      setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], claudeHint: true, loading: false, expanded: false } }));
+      return;
+    }
+
+    if (researchModel === "both" && !forceProvider) {
       setCompareTool(tool);
       setShowCompare(true);
-      setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true } }));
+      setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true, claudeHint: false } }));
       const [gemini, gpt] = await Promise.all([
         runResearchForProvider(tool, "gemini"),
         runResearchForProvider(tool, "gpt"),
       ]);
       setResearch((r) => ({
         ...r,
-        [toolId]: { expanded: true, loading: false, gemini, gpt },
+        [toolId]: { expanded: true, loading: false, claudeHint: false, gemini, gpt },
       }));
       return;
     }
 
-    const provider = researchModel;
-    setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true } }));
+    const provider = forceProvider || (researchModel === "gpt" ? "gpt" : "gemini");
+    setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true, claudeHint: false } }));
     const briefing = await runResearchForProvider(tool, provider);
     setResearch((r) => ({
       ...r,
       [toolId]: {
         expanded: true,
         loading: false,
+        claudeHint: false,
         ...(provider === "gemini" ? { gemini: briefing } : { gpt: briefing }),
       },
     }));
@@ -376,7 +415,10 @@ export default function ToolingPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <SmartCoLogo scale={0.85} /><span style={{ color: C.border }}>×</span><MUFGLogo scale={0.85} />
         </div>
-        <Link href="/" style={{ color: C.navy, textDecoration: "none", border: `1px solid ${C.border}`, padding: "9px 16px", borderRadius: 8, fontWeight: 600, fontSize: 13, background: C.white }}>← Board</Link>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <AskButton />
+          <Link href="/" style={{ color: C.navy, textDecoration: "none", border: `1px solid ${C.border}`, padding: "9px 16px", borderRadius: 8, fontWeight: 600, fontSize: 13, background: C.white }}>← Board</Link>
+        </div>
       </header>
 
       <main style={{ maxWidth: 1040, margin: "0 auto", padding: "40px 24px 80px", position: "relative", zIndex: 2 }}>
@@ -388,7 +430,7 @@ export default function ToolingPage() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: C.navy }}>AI research model:</span>
-          {(["gemini", "gpt", "both"] as const).map((m) => (
+          {(["claude", "gemini", "gpt", "both"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setResearchModel(m)}
@@ -435,6 +477,7 @@ export default function ToolingPage() {
               onEdit={updateTool}
               onDelete={deleteTool}
               onResearch={researchTool}
+              onResearchGemini={(id) => researchTool(id, "gemini")}
               onToggleExpand={toggleExpand}
             />
           ))}
@@ -476,7 +519,9 @@ export default function ToolingPage() {
               <h2 style={{ fontFamily: display, color: C.navy, margin: 0, fontSize: 22 }}>Researching {compareTool.name}</h2>
               <button style={btn.ghost} onClick={() => setShowCompare(false)}>Close</button>
             </div>
-            <p style={{ fontSize: 11, color: "#7A8499", fontStyle: "italic", margin: "0 0 18px" }}>AI-generated research — verify before quoting to the client.</p>
+            <p style={{ fontSize: 11, color: "#7A8499", margin: "0 0 18px", lineHeight: 1.45 }}>
+              Verify pricing, feature availability, MCP support and roadmap claims against the cited vendor source before quoting externally.
+            </p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               {(["gemini", "gpt"] as const).map((id) => {
                 const col = id === "gemini" ? compareResearch?.gemini : compareResearch?.gpt;

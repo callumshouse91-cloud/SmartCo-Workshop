@@ -4,46 +4,116 @@ export const runtime = "nodejs";
 
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.5";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+const OPENAI_SEARCH_MODEL = process.env.OPENAI_SEARCH_MODEL || process.env.OPENAI_MODEL || "gpt-5.5";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 type Provider = "claude" | "gemini" | "gpt";
-type Source = { title?: string; url: string };
-type AIResult = { text: string; error?: string; grounded?: boolean; sources?: Source[] };
+type Source = { title: string; url: string };
+type AIResult = { text: string; grounded: boolean; sources: Source[]; error?: string };
 
-function extractGptSources(d: Record<string, unknown>): Source[] {
-  const urls = new Set<string>();
-  const sources: Source[] = [];
-  const add = (url?: string, title?: string) => {
-    if (!url || urls.has(url)) return;
-    urls.add(url);
-    sources.push({ url, title });
-  };
+function normalizeSources(sources: { title?: string; url?: string }[]): Source[] {
+  const seen = new Set<string>();
+  const out: Source[] = [];
+  for (const s of sources) {
+    const url = (s.url || "").trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push({ title: (s.title || url).trim(), url });
+  }
+  return out;
+}
+
+function extractOpenAIText(d: Record<string, unknown>): string {
+  if (typeof d.output_text === "string" && d.output_text.trim()) return d.output_text.trim();
   for (const item of (d.output as Record<string, unknown>[]) || []) {
-    if (item.type === "web_search_call") {
-      for (const r of (item.results as Record<string, unknown>[]) || []) {
-        add(r.url as string, r.title as string);
+    if (item.type !== "message") continue;
+    for (const c of (item.content as Record<string, unknown>[]) || []) {
+      if (c.type === "output_text" && typeof c.text === "string" && c.text.trim()) {
+        return c.text.trim();
       }
     }
-    if (item.type === "message") {
-      for (const c of (item.content as Record<string, unknown>[]) || []) {
-        if (c.type === "output_text" && typeof c.text === "string" && c.annotations) {
-          for (const a of c.annotations as Record<string, unknown>[]) {
-            add(a.url as string, a.title as string);
-          }
+  }
+  return "";
+}
+
+function extractOpenAISources(d: Record<string, unknown>): Source[] {
+  const raw: { title?: string; url?: string }[] = [];
+  for (const item of (d.output as Record<string, unknown>[]) || []) {
+    if (item.type !== "message") continue;
+    for (const c of (item.content as Record<string, unknown>[]) || []) {
+      if (c.type !== "output_text" || !Array.isArray(c.annotations)) continue;
+      for (const a of c.annotations as Record<string, unknown>[]) {
+        if (a.type === "url_citation" && a.url) {
+          raw.push({ title: a.title as string | undefined, url: a.url as string });
         }
       }
     }
   }
-  return sources;
+  return normalizeSources(raw);
 }
 
-function gptHadWebSearch(d: Record<string, unknown>) {
-  return ((d.output as Record<string, unknown>[]) || []).some((i) => i.type === "web_search_call");
+function openAIIsGrounded(d: Record<string, unknown>, sources: Source[]): boolean {
+  const output = (d.output as Record<string, unknown>[]) || [];
+  const completed = output.some(
+    (i) => i.type === "web_search_call" && i.status === "completed"
+  );
+  return completed || sources.length > 0;
 }
 
-async function callClaude(system: string, content: string): Promise<AIResult> {
+function extractGeminiText(d: Record<string, unknown>): string {
+  const parts = ((d.candidates as Record<string, unknown>[])?.[0]?.content as Record<string, unknown>)?.parts as Record<string, unknown>[] | undefined;
+  if (!parts?.length) return "";
+  return parts.map((p) => (typeof p.text === "string" ? p.text : "")).join("").trim();
+}
+
+function extractGeminiSources(d: Record<string, unknown>): Source[] {
+  const raw: { title?: string; url?: string }[] = [];
+  const candidate = (d.candidates as Record<string, unknown>[])?.[0] as Record<string, unknown> | undefined;
+  const meta = candidate?.groundingMetadata as Record<string, unknown> | undefined;
+  if (meta?.groundingChunks) {
+    for (const chunk of meta.groundingChunks as Record<string, unknown>[]) {
+      const web = chunk.web as Record<string, unknown> | undefined;
+      if (web?.uri) raw.push({ title: web.title as string | undefined, url: web.uri as string });
+    }
+  }
+  const parts = (candidate?.content as Record<string, unknown>)?.parts as Record<string, unknown>[] | undefined;
+  if (parts) {
+    for (const p of parts) {
+      if (!Array.isArray(p.annotations)) continue;
+      for (const a of p.annotations as Record<string, unknown>[]) {
+        const url = (a.url || a.uri) as string | undefined;
+        if (url) raw.push({ title: a.title as string | undefined, url });
+      }
+    }
+  }
+  return normalizeSources(raw);
+}
+
+function geminiIsGrounded(d: Record<string, unknown>): boolean {
+  const meta = ((d.candidates as Record<string, unknown>[])?.[0] as Record<string, unknown> | undefined)
+    ?.groundingMetadata as Record<string, unknown> | undefined;
+  if (!meta) return false;
+  const queries = meta.webSearchQueries as unknown[] | undefined;
+  if (queries?.length) return true;
+  const chunks = meta.groundingChunks as Record<string, unknown>[] | undefined;
+  return !!chunks?.some((c) => (c.web as Record<string, unknown> | undefined)?.uri);
+}
+
+function ok(result: AIResult): AIResult {
+  return { text: result.text || "", grounded: !!result.grounded, sources: result.sources || [] };
+}
+
+async function callClaude(system: string, content: string, search: boolean): Promise<AIResult> {
+  if (search) {
+    const plain = await callClaudePlain(system, content);
+    return ok({ ...plain, grounded: false, sources: [] });
+  }
+  return ok(await callClaudePlain(system, content));
+}
+
+async function callClaudePlain(system: string, content: string): Promise<AIResult> {
   const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return { text: "", error: "claude key not set", grounded: false };
+  if (!key) return { text: "", grounded: false, sources: [], error: "claude key not set" };
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -65,100 +135,103 @@ async function callClaude(system: string, content: string): Promise<AIResult> {
       .map((b: { text?: string }) => b.text)
       .join("\n")
       .trim();
-    return { text };
+    return { text, grounded: false, sources: [] };
   } catch (e) {
-    return { text: "", error: String(e), grounded: false };
+    console.error("[ai] claude error:", e);
+    return { text: "", grounded: false, sources: [], error: String(e) };
   }
+}
+
+async function gptChatCompletion(messages: { role: string; content: string }[], tokenField: "max_tokens" | "max_completion_tokens") {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { ok: false as const, error: "gpt key not set" };
+  const body: Record<string, unknown> = { model: OPENAI_MODEL, messages };
+  body[tokenField] = 1000;
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const errBody = await r.text();
+    if (tokenField === "max_tokens" && /max_completion_tokens/i.test(errBody)) {
+      return gptChatCompletion(messages, "max_completion_tokens");
+    }
+    return { ok: false as const, error: `gpt ${r.status}: ${errBody}` };
+  }
+  const d = await r.json();
+  return { ok: true as const, text: (d.choices?.[0]?.message?.content || "").trim() };
 }
 
 async function callGptPlain(system: string, content: string): Promise<AIResult> {
+  const result = await gptChatCompletion(
+    [{ role: "system", content: system }, { role: "user", content }],
+    "max_tokens"
+  );
+  if (!result.ok) {
+    console.error("[ai] gpt plain error:", result.error);
+    return { text: "", grounded: false, sources: [], error: result.error };
+  }
+  return { text: result.text, grounded: false, sources: [] };
+}
+
+async function fetchOpenAIResponses(system: string, content: string, toolChoice: "required" | "auto") {
   const key = process.env.OPENAI_API_KEY;
-  if (!key) return { text: "", error: "gpt key not set", grounded: false };
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+  if (!key) return { ok: false as const, error: "gpt key not set" };
+  const r = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
+    headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: OPENAI_MODEL,
-      max_completion_tokens: 1000,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content },
-      ],
+      model: OPENAI_SEARCH_MODEL,
+      instructions: system,
+      input: content,
+      tools: [{ type: "web_search" }],
+      tool_choice: toolChoice,
     }),
   });
   if (!r.ok) {
-    const body = await r.text();
-    return { text: "", error: `gpt ${r.status}: ${body}`, grounded: false };
+    const errBody = await r.text();
+    return { ok: false as const, error: `gpt responses ${r.status}: ${errBody}` };
   }
   const d = await r.json();
-  return { text: (d.choices?.[0]?.message?.content || "").trim(), grounded: false };
+  return { ok: true as const, data: d as Record<string, unknown> };
 }
 
-async function callGpt(system: string, content: string, search = false): Promise<AIResult> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return { text: "", error: "gpt key not set", grounded: false };
-  if (!search) {
-    try {
-      return await callGptPlain(system, content);
-    } catch (e) {
-      return { text: "", error: String(e), grounded: false };
-    }
+async function callGptSearch(system: string, content: string): Promise<AIResult> {
+  let res = await fetchOpenAIResponses(system, content, "required");
+  if (!res.ok) {
+    console.error("[ai] gpt search required failed:", res.error);
+    res = await fetchOpenAIResponses(system, content, "auto");
   }
+  if (!res.ok) {
+    console.error("[ai] gpt search auto failed:", res.error);
+    const fallback = await callGptPlain(system, content);
+    return ok({ ...fallback, grounded: false, sources: [] });
+  }
+  const text = extractOpenAIText(res.data);
+  const sources = extractOpenAISources(res.data);
+  const grounded = openAIIsGrounded(res.data, sources);
+  if (!text) {
+    const fallback = await callGptPlain(system, content);
+    return ok({ ...fallback, grounded: false, sources: [] });
+  }
+  return ok({ text, grounded, sources });
+}
+
+async function callGpt(system: string, content: string, search: boolean): Promise<AIResult> {
   try {
-    const r = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        instructions: system,
-        input: content,
-        tools: [{ type: "web_search" }],
-      }),
-    });
-    if (!r.ok) {
-      const errBody = await r.text();
-      const fallback = await callGptPlain(system, content);
-      return { ...fallback, grounded: false, error: fallback.error || `search unavailable (${r.status}): ${errBody}` };
-    }
-    const d = await r.json();
-    const text = (d.output_text as string) || "";
-    const sources = extractGptSources(d);
-    const grounded = gptHadWebSearch(d) || sources.length > 0;
-    if (!text.trim()) {
-      const fallback = await callGptPlain(system, content);
-      return { ...fallback, grounded: false };
-    }
-    return { text: text.trim(), grounded, sources };
+    if (!search) return ok(await callGptPlain(system, content));
+    return await callGptSearch(system, content);
   } catch (e) {
-    try {
-      const fallback = await callGptPlain(system, content);
-      return { ...fallback, grounded: false, error: fallback.error || String(e) };
-    } catch (err) {
-      return { text: "", error: String(err), grounded: false };
-    }
+    console.error("[ai] gpt error:", e);
+    const fallback = await callGptPlain(system, content);
+    return ok({ ...fallback, grounded: false, sources: [], error: String(e) });
   }
-}
-
-function extractGeminiSources(d: Record<string, unknown>): Source[] {
-  const meta = (d.candidates as Record<string, unknown>[])?.[0]?.groundingMetadata as Record<string, unknown> | undefined;
-  if (!meta) return [];
-  return ((meta.groundingChunks as Record<string, unknown>[]) || [])
-    .filter((c) => (c.web as Record<string, unknown>)?.uri)
-    .map((c) => {
-      const web = c.web as Record<string, unknown>;
-      return { url: web.uri as string, title: web.title as string | undefined };
-    });
 }
 
 async function callGeminiPlain(system: string, content: string): Promise<AIResult> {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return { text: "", error: "gemini key not set", grounded: false };
+  if (!key) return { text: "", grounded: false, sources: [], error: "gemini key not set" };
   const r = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
     {
@@ -172,57 +245,53 @@ async function callGeminiPlain(system: string, content: string): Promise<AIResul
   );
   if (!r.ok) {
     const body = await r.text();
-    return { text: "", error: `gemini ${r.status}: ${body}`, grounded: false };
+    console.error("[ai] gemini plain error:", body);
+    return { text: "", grounded: false, sources: [], error: `gemini ${r.status}: ${body}` };
   }
   const d = await r.json();
-  return { text: (d.candidates?.[0]?.content?.parts?.[0]?.text || "").trim(), grounded: false };
+  return { text: extractGeminiText(d), grounded: false, sources: [] };
 }
 
-async function callGemini(system: string, content: string, search = false): Promise<AIResult> {
+async function callGeminiSearch(system: string, content: string): Promise<AIResult> {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return { text: "", error: "gemini key not set", grounded: false };
-  if (!search) {
-    try {
-      return await callGeminiPlain(system, content);
-    } catch (e) {
-      return { text: "", error: String(e), grounded: false };
+  if (!key) return { text: "", grounded: false, sources: [], error: "gemini key not set" };
+  const combined = `${system}\n\n${content}`;
+  const r = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: combined }] }],
+        tools: [{ google_search: {} }],
+      }),
     }
+  );
+  if (!r.ok) {
+    const errBody = await r.text();
+    console.error("[ai] gemini search error:", errBody);
+    const fallback = await callGeminiPlain(system, content);
+    return ok({ ...fallback, grounded: false, sources: [] });
   }
+  const d = await r.json();
+  const text = extractGeminiText(d);
+  const sources = extractGeminiSources(d);
+  const grounded = geminiIsGrounded(d);
+  if (!text) {
+    const fallback = await callGeminiPlain(system, content);
+    return ok({ ...fallback, grounded: false, sources: [] });
+  }
+  return ok({ text, grounded, sources });
+}
+
+async function callGemini(system: string, content: string, search: boolean): Promise<AIResult> {
   try {
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: system }] },
-          contents: [{ role: "user", parts: [{ text: content }] }],
-          tools: [{ google_search: {} }],
-        }),
-      }
-    );
-    if (!r.ok) {
-      const errBody = await r.text();
-      const fallback = await callGeminiPlain(system, content);
-      return { ...fallback, grounded: false, error: fallback.error || `search unavailable (${r.status}): ${errBody}` };
-    }
-    const d = await r.json();
-    const text = (d.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-    const sources = extractGeminiSources(d);
-    const meta = d.candidates?.[0]?.groundingMetadata;
-    const grounded = sources.length > 0 || !!(meta?.webSearchQueries?.length);
-    if (!text) {
-      const fallback = await callGeminiPlain(system, content);
-      return { ...fallback, grounded: false };
-    }
-    return { text, grounded, sources };
+    if (!search) return ok(await callGeminiPlain(system, content));
+    return await callGeminiSearch(system, content);
   } catch (e) {
-    try {
-      const fallback = await callGeminiPlain(system, content);
-      return { ...fallback, grounded: false, error: fallback.error || String(e) };
-    } catch (err) {
-      return { text: "", error: String(err), grounded: false };
-    }
+    console.error("[ai] gemini error:", e);
+    const fallback = await callGeminiPlain(system, content);
+    return ok({ ...fallback, grounded: false, sources: [], error: String(e) });
   }
 }
 
@@ -233,9 +302,11 @@ export async function POST(req: Request) {
     let result: AIResult;
     if (p === "gpt") result = await callGpt(system, content, !!search);
     else if (p === "gemini") result = await callGemini(system, content, !!search);
-    else result = await callClaude(system, content);
-    return NextResponse.json(result);
+    else result = await callClaude(system, content, !!search);
+    const { error, ...rest } = ok(result);
+    return NextResponse.json(error ? { ...rest, error } : rest);
   } catch (e) {
-    return NextResponse.json({ text: "", error: String(e), grounded: false });
+    console.error("[ai] route error:", e);
+    return NextResponse.json({ text: "", grounded: false, sources: [], error: String(e) });
   }
 }

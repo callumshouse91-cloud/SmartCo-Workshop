@@ -64,30 +64,40 @@ export function Corner() {
 }
 
 export type AIProvider = "claude" | "gemini" | "gpt";
-export type AISource = { title?: string; url: string };
-export type AIResult = { text: string; error?: string; grounded?: boolean; sources?: AISource[] };
+export type AISource = { title: string; url: string };
+export type AIResult = { text: string; error?: string; grounded: boolean; sources: AISource[] };
 
 export async function callAIResult(
   system: string,
   content: string,
   provider: AIProvider = "claude",
-  options?: { search?: boolean }
+  options?: { search?: boolean; timeoutMs?: number }
 ): Promise<AIResult> {
+  const controller = new AbortController();
+  const timer = options?.timeoutMs
+    ? setTimeout(() => controller.abort(), options.timeoutMs)
+    : null;
   try {
     const res = await fetch("/api/ai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ system, content, provider, search: options?.search }),
+      signal: controller.signal,
     });
     const data = await res.json();
     return {
       text: (data.text || "").trim(),
       error: data.error,
-      grounded: data.grounded,
-      sources: data.sources,
+      grounded: !!data.grounded,
+      sources: Array.isArray(data.sources) ? data.sources : [],
     };
   } catch (e) {
-    return { text: "", error: String(e), grounded: false };
+    if (controller.signal.aborted) {
+      return { text: "Search timed out — try again.", error: "timeout", grounded: false, sources: [] };
+    }
+    return { text: "", error: String(e), grounded: false, sources: [] };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
