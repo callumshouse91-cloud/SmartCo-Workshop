@@ -990,44 +990,64 @@ function ThemeSectionColumns({ themes, cards }: { themes: Theme[]; cards: any[] 
 function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean }) {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState("");
-  const [pos, setPos] = useState({ left: 0, bottom: 0 });
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const updatePos = useCallback(() => {
+  const measurePos = useCallback(() => {
     const btn = btnRef.current;
-    if (!btn) return;
+    if (!btn) return null;
+    const panel = panelRef.current;
     const r = btn.getBoundingClientRect();
     const width = 280;
-    setPos({
-      left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
-      bottom: window.innerHeight - r.top + 8,
-    });
+    const gap = 8;
+    const panelH = panel?.offsetHeight ?? 132;
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
+    const top = Math.max(12, r.top - panelH - gap);
+    return { left, top };
   }, []);
 
   const close = useCallback(() => {
     setOpen(false);
     setLabel("");
+    setPos(null);
   }, []);
+
+  const openPopover = useCallback(() => {
+    const btn = btnRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const width = 280;
+    const gap = 8;
+    const estH = 132;
+    setPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
+      top: Math.max(12, r.top - estH - gap),
+    });
+    setOpen(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const next = measurePos();
+    if (next) setPos(next);
+    inputRef.current?.focus({ preventScroll: true });
+  }, [open, measurePos]);
 
   useEffect(() => {
     if (!open) return;
-    updatePos();
-    const onReflow = () => updatePos();
+    const onReflow = () => {
+      const next = measurePos();
+      if (next) setPos(next);
+    };
     window.addEventListener("resize", onReflow);
     window.addEventListener("scroll", onReflow, true);
     return () => {
       window.removeEventListener("resize", onReflow);
       window.removeEventListener("scroll", onReflow, true);
     };
-  }, [open, updatePos]);
-
-  useEffect(() => {
-    if (!open) return;
-    const t = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(t);
-  }, [open]);
+  }, [open, measurePos]);
 
   useEffect(() => {
     if (!open) return;
@@ -1043,11 +1063,11 @@ function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean
   const handleCreate = () => {
     if (onCreate(label)) {
       setLabel("");
-      setOpen(false);
+      close();
     }
   };
 
-  const panel = open ? (
+  const panel = open && pos ? (
     <div
       ref={panelRef}
       role="dialog"
@@ -1055,7 +1075,7 @@ function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean
       style={{
         position: "fixed",
         left: pos.left,
-        bottom: pos.bottom,
+        top: pos.top,
         width: 280,
         zIndex: CATEGORY_POPOVER_Z,
         background: C.white,
@@ -1065,6 +1085,7 @@ function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean
         padding: 12,
       }}
       onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
     >
       <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>New category</div>
       <input
@@ -1101,13 +1122,7 @@ function NewCategoryPopover({ onCreate }: { onCreate: (label: string) => boolean
         ref={btnRef}
         type="button"
         style={{ ...btn.ghost, fontSize: 12, padding: "6px 10px", whiteSpace: "nowrap", flexShrink: 0 }}
-        onClick={() => {
-          if (open) close();
-          else {
-            updatePos();
-            setOpen(true);
-          }
-        }}
+        onClick={() => (open ? close() : openPopover())}
       >+ New category</button>
       {typeof document !== "undefined" && panel ? createPortal(panel, document.body) : null}
     </>
