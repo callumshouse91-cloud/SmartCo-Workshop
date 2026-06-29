@@ -64,22 +64,30 @@ export function Corner() {
 }
 
 export type AIProvider = "claude" | "gemini" | "gpt";
+export type AISource = { title?: string; url: string };
+export type AIResult = { text: string; error?: string; grounded?: boolean; sources?: AISource[] };
 
 export async function callAIResult(
   system: string,
   content: string,
-  provider: AIProvider = "claude"
-): Promise<{ text: string; error?: string }> {
+  provider: AIProvider = "claude",
+  options?: { search?: boolean }
+): Promise<AIResult> {
   try {
     const res = await fetch("/api/ai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ system, content, provider }),
+      body: JSON.stringify({ system, content, provider, search: options?.search }),
     });
     const data = await res.json();
-    return { text: (data.text || "").trim(), error: data.error };
+    return {
+      text: (data.text || "").trim(),
+      error: data.error,
+      grounded: data.grounded,
+      sources: data.sources,
+    };
   } catch (e) {
-    return { text: "", error: String(e) };
+    return { text: "", error: String(e), grounded: false };
   }
 }
 
