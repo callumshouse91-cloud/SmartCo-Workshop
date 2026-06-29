@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { C, THEMES, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider, type Theme } from "./brand";
+import { C, THEMES, SmartCoLogo, MUFGLogo, Corner, callAIResult, parseJSON, type AIProvider, type Theme } from "./brand";
 import { AskButton } from "@/components/AskPanel";
 import { QuestionsNavLink } from "@/components/QuestionsNavLink";
 import { useRegisterAskContext } from "@/components/AskContext";
@@ -171,13 +171,12 @@ type BoardData = {
   showLinkages?: boolean;
 };
 
-type ArrangeByKey = "category" | "dataPoint" | "impact" | "description";
+type ArrangeByKey = "category" | "dataPoint" | "impact";
 
 const ARRANGE_OPTIONS: { id: ArrangeByKey; label: string }[] = [
   { id: "category", label: "Category" },
-  { id: "dataPoint", label: "Data point" },
+  { id: "dataPoint", label: "Data source" },
   { id: "impact", label: "Impact" },
-  { id: "description", label: "Description" },
 ];
 
 type SessionPayload = {
@@ -192,20 +191,31 @@ const DEFAULT_DATA_POINTS = [
   "SharePoint", "Excel", "Jira", "Confluence", "Outlook/Email", "Teams", "Planview", "ServiceNow", "N/A",
 ];
 const DEFAULT_IMPACTS = [
-  "Hours saved / week", "Increased risk", "Quality issue", "Regulatory issue", "Visibility", "Insights",
+  "Time / effort", "Cost", "Quality", "Risk / regulatory",
 ];
-const HOURS_IMPACT_TYPE = "Hours saved / week";
 const ADD_NEW_OPTION = "__add_new__";
+const UNSPECIFIED_IMPACT = "Unspecified";
 
-type CardImpact = { type: string; hours?: number };
+const LEGACY_IMPACT_MAP: Record<string, string> = {
+  "hours saved / week": "Time / effort",
+  "increased risk": "Risk / regulatory",
+  "quality issue": "Quality",
+  "regulatory issue": "Risk / regulatory",
+  visibility: "Quality",
+  insights: "Quality",
+  "time / effort": "Time / effort",
+  cost: "Cost",
+  quality: "Quality",
+  "risk / regulatory": "Risk / regulatory",
+};
 
 type WorkshopCard = {
   id: string;
   theme: string | null;
   text: string;
   description: string;
-  dataPoint: string;
-  impact: CardImpact | null;
+  dataPoints: string[];
+  impacts: string[];
   x: number;
   y: number;
   ai: boolean;
@@ -216,7 +226,7 @@ type WorkshopCard = {
   h?: number;
 };
 
-function mergeStringOptions(defaults: string[], saved?: string[]): string[] {
+function mergeStringOptions(defaults: string[], saved?: string[], opts?: { appendNa?: boolean }): string[] {
   const out = [...defaults];
   const seen = new Set(out.map((s) => s.toLowerCase()));
   for (const s of saved ?? []) {
@@ -227,13 +237,158 @@ function mergeStringOptions(defaults: string[], saved?: string[]): string[] {
       seen.add(t.toLowerCase());
     }
   }
-  if (!seen.has("n/a")) out.push("N/A");
+  if (opts?.appendNa && !seen.has("n/a")) out.push("N/A");
   return out;
 }
 
 function extractCustomOptions(all: string[], defaults: string[]): string[] {
   const def = new Set(defaults.map((s) => s.toLowerCase()));
   return all.filter((s) => !def.has(s.toLowerCase()));
+}
+
+const NA_DATA_POINT = "N/A";
+
+function normalizeDataPoints(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    const cleaned = raw
+      .filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+      .map((d) => d.trim());
+    if (cleaned.length === 0) return [NA_DATA_POINT];
+    if (cleaned.some((d) => d.toLowerCase() === "n/a")) return [NA_DATA_POINT];
+    return [...new Set(cleaned)];
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const t = raw.trim();
+    if (t.toLowerCase() === "n/a") return [NA_DATA_POINT];
+    return [t];
+  }
+  return [NA_DATA_POINT];
+}
+
+function realDataPoints(dataPoints: string[]): string[] {
+  return dataPoints.filter((d) => d !== NA_DATA_POINT);
+}
+
+function formatDataSourcesSummary(dataPoints: string[]): string | null {
+  const real = realDataPoints(dataPoints);
+  if (!real.length) return null;
+  return real.join(" + ");
+}
+
+/** @deprecated use formatDataSourcesSummary */
+function formatDataPointsSummary(dataPoints: string[]): string | null {
+  return formatDataSourcesSummary(dataPoints);
+}
+
+function primaryDataSource(card: WorkshopCard): string {
+  const real = realDataPoints(card.dataPoints);
+  return real.length ? real[0] : NA_DATA_POINT;
+}
+
+function secondaryDataSources(card: WorkshopCard): string[] {
+  const real = realDataPoints(card.dataPoints);
+  return real.length > 1 ? real.slice(1) : [];
+}
+
+type DataSourceLane = { source: string; count: number };
+
+function buildDataSourceLanes(cards: WorkshopCard[]): DataSourceLane[] {
+  const counts = new Map<string, number>();
+  for (const card of cards) {
+    const primary = primaryDataSource(card);
+    counts.set(primary, (counts.get(primary) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([source, count]) => ({ source, count }))
+    .sort((a, b) => b.count - a.count || a.source.localeCompare(b.source, undefined, { sensitivity: "base" }));
+}
+
+function dataSourceLaneIndex(lanes: DataSourceLane[], source: string): number {
+  return lanes.findIndex((l) => l.source === source);
+}
+
+function mapLegacyImpact(value: string): string {
+  const mapped = LEGACY_IMPACT_MAP[value.trim().toLowerCase()];
+  return mapped ?? value.trim();
+}
+
+function normalizeImpacts(raw: unknown, legacyImpact?: { type?: string } | null): string[] {
+  if (Array.isArray(raw)) {
+    const cleaned = raw
+      .filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+      .map((d) => mapLegacyImpact(d));
+    return [...new Set(cleaned)];
+  }
+  if (legacyImpact?.type?.trim()) {
+    return [mapLegacyImpact(legacyImpact.type)];
+  }
+  if (raw && typeof raw === "object" && "type" in (raw as object)) {
+    const t = (raw as { type?: string }).type;
+    if (t?.trim()) return [mapLegacyImpact(t)];
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return [mapLegacyImpact(raw)];
+  }
+  return [];
+}
+
+function toggleImpacts(current: string[], option: string): string[] {
+  if (current.includes(option)) return current.filter((d) => d !== option);
+  return [...current, option];
+}
+
+function removeImpact(current: string[], option: string): string[] {
+  return current.filter((d) => d !== option);
+}
+
+function primaryImpact(card: WorkshopCard): string {
+  return card.impacts.length ? card.impacts[0] : UNSPECIFIED_IMPACT;
+}
+
+function secondaryImpacts(card: WorkshopCard): string[] {
+  return card.impacts.length > 1 ? card.impacts.slice(1) : [];
+}
+
+type ImpactLane = { impact: string; count: number };
+
+function buildImpactLanes(cards: WorkshopCard[]): ImpactLane[] {
+  const counts = new Map<string, number>();
+  for (const card of cards) {
+    const primary = primaryImpact(card);
+    counts.set(primary, (counts.get(primary) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([impact, count]) => ({ impact, count }))
+    .sort((a, b) => b.count - a.count || a.impact.localeCompare(b.impact, undefined, { sensitivity: "base" }));
+}
+
+function impactLaneIndex(lanes: ImpactLane[], impact: string): number {
+  return lanes.findIndex((l) => l.impact === impact);
+}
+
+function formatImpactsSummary(impacts: string[]): string | null {
+  if (!impacts.length) return null;
+  return impacts.join(" + ");
+}
+
+function toggleDataPoints(current: string[], option: string): string[] {
+  if (option === NA_DATA_POINT) return [NA_DATA_POINT];
+  const withoutNa = current.filter((d) => d !== NA_DATA_POINT);
+  if (withoutNa.includes(option)) {
+    const next = withoutNa.filter((d) => d !== option);
+    return next.length === 0 ? [NA_DATA_POINT] : next;
+  }
+  return [...withoutNa, option];
+}
+
+function removeDataPoint(current: string[], option: string): string[] {
+  const next = current.filter((d) => d !== option);
+  return next.length === 0 ? [NA_DATA_POINT] : next;
+}
+
+function normalizeArrangeBy(raw: unknown): ArrangeByKey | undefined {
+  if (raw === "description") return undefined;
+  return ARRANGE_OPTIONS.some((o) => o.id === raw) ? (raw as ArrangeByKey) : undefined;
 }
 
 function normalizeCard(raw: any): WorkshopCard {
@@ -245,21 +400,13 @@ function normalizeCard(raw: any): WorkshopCard {
     theme: raw.theme ?? null,
     text,
     description: description || text,
-    dataPoint: typeof raw?.dataPoint === "string" ? raw.dataPoint : "N/A",
-    impact: raw?.impact?.type ? { type: raw.impact.type, hours: raw.impact.hours } : null,
+    dataPoints: normalizeDataPoints(raw?.dataPoints ?? raw?.dataPoint),
+    impacts: normalizeImpacts(raw?.impacts, raw?.impact),
     x: typeof raw?.x === "number" ? raw.x : 0,
     y: typeof raw?.y === "number" ? raw.y : 0,
     ai: !!raw?.ai,
     classifying: false,
   };
-}
-
-function impactSortValue(c: WorkshopCard): string {
-  if (!c.impact?.type) return "\uffff";
-  if (c.impact.type === HOURS_IMPACT_TYPE && c.impact.hours != null) {
-    return `${c.impact.type}:${String(c.impact.hours).padStart(8, "0")}`;
-  }
-  return c.impact.type;
 }
 
 function columnIndex(theme: string | null, themes: Theme[]): number {
@@ -268,9 +415,70 @@ function columnIndex(theme: string | null, themes: Theme[]): number {
   return i < 0 ? themes.length + 1 : i;
 }
 
-function layoutCards(cards: WorkshopCard[], sortBy: ArrangeByKey, themes: Theme[]): WorkshopCard[] {
+function layoutCards(
+  cards: WorkshopCard[],
+  sortBy: ArrangeByKey,
+  themes: Theme[],
+): WorkshopCard[] {
   const CARD_ROW_H = 122;
   const CARD_Y0 = 80;
+
+  if (sortBy === "dataPoint") {
+    const lanes = buildDataSourceLanes(cards);
+    if (!lanes.length) return cards;
+
+    const groups = new Map<number, WorkshopCard[]>();
+    for (let i = 0; i < lanes.length; i++) groups.set(i, []);
+
+    for (const card of cards) {
+      const col = dataSourceLaneIndex(lanes, primaryDataSource(card));
+      if (col >= 0) groups.get(col)!.push(card);
+    }
+
+    const placed: WorkshopCard[] = [];
+    for (let col = 0; col < lanes.length; col++) {
+      const colCards = [...(groups.get(col) ?? [])].sort((a, b) =>
+        cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" }),
+      );
+      colCards.forEach((card, row) => {
+        placed.push({
+          ...card,
+          x: SECTION_X0 + col * SECTION_COL_W,
+          y: CARD_Y0 + row * CARD_ROW_H,
+        });
+      });
+    }
+    return placed;
+  }
+
+  if (sortBy === "impact") {
+    const lanes = buildImpactLanes(cards);
+    if (!lanes.length) return cards;
+
+    const groups = new Map<number, WorkshopCard[]>();
+    for (let i = 0; i < lanes.length; i++) groups.set(i, []);
+
+    for (const card of cards) {
+      const col = impactLaneIndex(lanes, primaryImpact(card));
+      if (col >= 0) groups.get(col)!.push(card);
+    }
+
+    const placed: WorkshopCard[] = [];
+    for (let col = 0; col < lanes.length; col++) {
+      const colCards = [...(groups.get(col) ?? [])].sort((a, b) =>
+        cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" }),
+      );
+      colCards.forEach((card, row) => {
+        placed.push({
+          ...card,
+          x: SECTION_X0 + col * SECTION_COL_W,
+          y: CARD_Y0 + row * CARD_ROW_H,
+        });
+      });
+    }
+    return placed;
+  }
+
   const groups = new Map<number, WorkshopCard[]>();
   for (const card of cards) {
     const col = columnIndex(card.theme, themes);
@@ -278,19 +486,8 @@ function layoutCards(cards: WorkshopCard[], sortBy: ArrangeByKey, themes: Theme[
     groups.get(col)!.push(card);
   }
 
-  const cmp = (a: WorkshopCard, b: WorkshopCard): number => {
-    switch (sortBy) {
-      case "dataPoint":
-        return (a.dataPoint || "").localeCompare(b.dataPoint || "", undefined, { sensitivity: "base" });
-      case "impact":
-        return impactSortValue(a).localeCompare(impactSortValue(b));
-      case "description":
-        return cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" });
-      case "category":
-      default:
-        return cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" });
-    }
-  };
+  const cmp = (a: WorkshopCard, b: WorkshopCard): number =>
+    cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" });
 
   const cols = [...groups.keys()].sort((a, b) => a - b);
   const placed: WorkshopCard[] = [];
@@ -307,12 +504,6 @@ function layoutCards(cards: WorkshopCard[], sortBy: ArrangeByKey, themes: Theme[
   return placed;
 }
 
-function impactLabel(impact: CardImpact | null | undefined): string {
-  if (!impact?.type) return "";
-  if (impact.type === HOURS_IMPACT_TYPE && impact.hours != null) return `${impact.hours} hrs/wk`;
-  return impact.type;
-}
-
 function matchOption(value: string | undefined, options: string[]): string | null {
   if (!value?.trim()) return null;
   const v = value.trim().toLowerCase();
@@ -325,41 +516,45 @@ async function fetchClassifyFields(
   seed: string,
   currentTheme: string | null,
   opts: { dataPoints: string[]; impacts: string[]; themes: Theme[]; provider: AIProvider },
-): Promise<Partial<WorkshopCard>> {
+): Promise<{ patch: Partial<WorkshopCard>; error?: string }> {
+  console.log(`[board-ai] classify-card → provider: ${opts.provider}`);
   const { system, content } = buildClassifyPrompt(seed, {
     dataPoints: opts.dataPoints,
     impacts: opts.impacts,
     themeIds: opts.themes.map((t) => t.id),
   });
+  const fallback = { description: seed, dataPoints: [NA_DATA_POINT], impacts: [] };
   try {
     const { text, error } = await callAIResult(system, content, opts.provider);
-    if (error) throw new Error(error);
+    if (error) return { patch: fallback, error };
     const parsed = parseJSON(text) as {
       description?: string;
       dataPoint?: string;
-      impact?: { type?: string; hours?: number };
+      impacts?: string[];
+      impact?: { type?: string };
       theme?: string;
     } | null;
-    if (!parsed) throw new Error("parse failed");
+    if (!parsed) return { patch: fallback, error: "could not parse response" };
+    const matchedDp = matchOption(parsed.dataPoint, opts.dataPoints);
     const patch: Partial<WorkshopCard> = {
       description: typeof parsed.description === "string" && parsed.description.trim() ? parsed.description.trim() : seed,
-      dataPoint: matchOption(parsed.dataPoint, opts.dataPoints) ?? "N/A",
+      dataPoints: matchedDp ? [matchedDp] : [NA_DATA_POINT],
     };
-    const impactType = matchOption(parsed.impact?.type, opts.impacts);
-    if (impactType) {
-      patch.impact =
-        impactType === HOURS_IMPACT_TYPE
-          ? { type: impactType, hours: typeof parsed.impact?.hours === "number" ? parsed.impact.hours : undefined }
-          : { type: impactType };
-    } else {
-      patch.impact = null;
-    }
+    const rawImpacts = Array.isArray(parsed.impacts)
+      ? parsed.impacts
+      : parsed.impact?.type
+        ? [parsed.impact.type]
+        : [];
+    const matchedImpacts = rawImpacts
+      .map((v) => matchOption(typeof v === "string" ? v : undefined, opts.impacts))
+      .filter((v): v is string => !!v);
+    patch.impacts = normalizeImpacts(matchedImpacts.length ? matchedImpacts : rawImpacts, parsed.impact);
     if (currentTheme == null && parsed.theme && opts.themes.some((t) => t.id === parsed.theme)) {
       patch.theme = parsed.theme;
     }
-    return patch;
-  } catch {
-    return { description: seed, dataPoint: "N/A", impact: null };
+    return { patch };
+  } catch (e) {
+    return { patch: fallback, error: String(e) };
   }
 }
 
@@ -461,9 +656,32 @@ const createBoard = (name: string, cards: any[] = [], links: any[] = [], insight
   pan: { x: 0, y: 0 },
 });
 
+const DEFAULT_AI_PROVIDER: AIProvider = "claude";
+
+function isAiUseCasesBoardName(name: string): boolean {
+  return /ai\s*use.?cases?/i.test(name) || /^board\s*2$/i.test(name);
+}
+
+function findAiUseCasesBoard(boards: BoardData[]): BoardData | undefined {
+  return boards.find((b) => isAiUseCasesBoardName(b.name)) ?? boards[1];
+}
+
+function getChallengesBoard(boards: BoardData[]): BoardData {
+  const named = boards.find((b) => /challenges?|live/i.test(b.name) && !isAiUseCasesBoardName(b.name));
+  return named ?? boards[0];
+}
+
+function ensureAiUseCasesBoard(boards: BoardData[]): { boards: BoardData[]; boardId: string } {
+  const existing = findAiUseCasesBoard(boards);
+  if (existing) return { boards, boardId: existing.id };
+  const board = createBoard("AI use cases");
+  return { boards: [...boards, board], boardId: board.id };
+}
+
 const defaultSession = (): SessionPayload => {
-  const board = createBoard("Board 1", SEED.map(normalizeCard), [], "");
-  return { boards: [board], activeId: board.id };
+  const challenges = createBoard("Live challenges", SEED.map(normalizeCard), [], "");
+  const useCases = createBoard("AI use cases", [], [], "");
+  return { boards: [challenges, useCases], activeId: challenges.id };
 };
 
 const normalizeSession = (v: any): SessionPayload => {
@@ -479,7 +697,7 @@ const normalizeSession = (v: any): SessionPayload => {
       insight: typeof b.insight === "string" ? b.insight : "",
       zoom: typeof b.zoom === "number" ? b.zoom : 1,
       pan: b.pan && typeof b.pan.x === "number" ? b.pan : { x: 0, y: 0 },
-      arrangeBy: ARRANGE_OPTIONS.some((o) => o.id === b.arrangeBy) ? b.arrangeBy : undefined,
+      arrangeBy: normalizeArrangeBy(b.arrangeBy),
       showLinkages: b.showLinkages === false ? false : undefined,
     }));
     const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
@@ -550,16 +768,34 @@ const PROVIDER_COLORS: Record<AIProvider, string> = {
   gpt: C.navy,
 };
 
-type SuggestCandidate = { text: string; error?: string; loading?: boolean };
+function providerLabel(p: AIProvider): string {
+  return AI_PROVIDERS.find((x) => x.id === p)?.label ?? p;
+}
+
+function aiErrorMessage(p: AIProvider, detail?: string): string {
+  const name = providerLabel(p);
+  const d = (detail ?? "").toLowerCase();
+  if (!detail || d.includes("api key") || d.includes("not configured") || d.includes("missing")) {
+    return `${name}: API key missing or request failed`;
+  }
+  return `${name}: ${detail}`;
+}
+
+type SuggestCandidate = { text: string; justification?: string; error?: string; loading?: boolean };
 
 function parseSuggestCandidate(raw: string, apiError?: string): SuggestCandidate {
   if (apiError) return { text: "", error: "Couldn't generate" };
-  const obj = parseJSON(raw);
+  const obj = parseJSON(raw) as { text?: string; justification?: string } | null;
   if (obj && typeof obj.text === "string" && obj.text.trim()) {
-    return { text: obj.text.trim() };
+    return {
+      text: obj.text.trim(),
+      justification: typeof obj.justification === "string" && obj.justification.trim()
+        ? obj.justification.trim()
+        : undefined,
+    };
   }
   const trimmed = raw?.trim();
-  if (trimmed) return { text: trimmed.replace(/^["']|["']$/g, "").slice(0, 120) };
+  if (trimmed) return { text: trimmed.replace(/^["']|["']$/g, "").slice(0, 160) };
   return { text: "", error: "Couldn't generate" };
 }
 
@@ -805,6 +1041,306 @@ function PortaledSelect({
   );
 }
 
+type MultiSelectBehavior = {
+  normalize: (value: string[]) => string[];
+  toggle: (current: string[], option: string) => string[];
+  remove: (current: string[], option: string) => string[];
+  isEmptyDisplay: (current: string[]) => boolean;
+  emptyLabel: string;
+};
+
+const DATA_SOURCE_MULTI: MultiSelectBehavior = {
+  normalize: normalizeDataPoints,
+  toggle: toggleDataPoints,
+  remove: removeDataPoint,
+  isEmptyDisplay: (v) => v.length === 0 || (v.length === 1 && v[0] === NA_DATA_POINT),
+  emptyLabel: "N/A",
+};
+
+const PLAIN_MULTI: MultiSelectBehavior = {
+  normalize: (v) => normalizeImpacts(v),
+  toggle: toggleImpacts,
+  remove: removeImpact,
+  isEmptyDisplay: (v) => v.length === 0,
+  emptyLabel: "—",
+};
+
+function PortaledMultiSelect({
+  label,
+  value,
+  options,
+  onChange,
+  onAddNew,
+  menuZIndex = CARD_MENU_Z,
+  behavior = DATA_SOURCE_MULTI,
+}: {
+  label: string;
+  value: string[];
+  options: { value: string; label: string }[];
+  onChange: (v: string[]) => void;
+  onAddNew?: (v: string) => void;
+  menuZIndex?: number;
+  behavior?: MultiSelectBehavior;
+}) {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selected = behavior.normalize(value);
+  const extraValues = selected.filter((v) => !options.some((o) => o.value === v));
+  const list = [
+    ...options,
+    ...extraValues.map((v) => ({ value: v, label: v })),
+  ];
+
+  const measurePos = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const menu = menuRef.current;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 200);
+    const gap = 4;
+    const menuH = menu?.offsetHeight ?? 160;
+    let top = r.bottom + gap;
+    if (top + menuH > window.innerHeight - 8) {
+      top = Math.max(8, r.top - menuH - gap);
+    }
+    return {
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      top,
+      width,
+    };
+  }, []);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setAdding(false);
+    setDraft("");
+    setPos(null);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 200);
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - width - 8)),
+      top: Math.max(8, r.bottom + 4),
+      width,
+    });
+    setOpen(true);
+    setAdding(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const next = measurePos();
+    if (next) setPos(next);
+    if (adding) inputRef.current?.focus({ preventScroll: true });
+  }, [open, adding, list.length, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onReflow = () => { const next = measurePos(); if (next) setPos(next); };
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, adding, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: Event) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close();
+    };
+    const id = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", onDoc);
+      document.addEventListener("pointerdown", onDoc);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("pointerdown", onDoc);
+    };
+  }, [open, close]);
+
+  const itemBtn = (checked: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    border: "none",
+    background: checked ? C.surface : "transparent",
+    color: C.navy,
+    fontSize: 12,
+    fontWeight: checked ? 700 : 600,
+    padding: "8px 10px",
+    cursor: "pointer",
+    textAlign: "left",
+    fontFamily: "inherit",
+  });
+
+  const isChecked = (opt: string) => selected.includes(opt);
+
+  const menu = open && pos ? (
+    <div
+      ref={menuRef}
+      data-card-edit-menu
+      data-composer-select-menu={menuZIndex >= COMPOSER_Z ? true : undefined}
+      role="listbox"
+      aria-multiselectable
+      style={{
+        position: "fixed",
+        left: pos.left,
+        top: pos.top,
+        width: pos.width,
+        zIndex: menuZIndex,
+        background: C.white,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        boxShadow: "0 10px 30px rgba(10,22,40,.14)",
+        overflow: "hidden",
+        maxHeight: 240,
+        overflowY: "auto",
+        pointerEvents: "auto",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {adding ? (
+        <div style={{ padding: 10 }}>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="New option"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const t = draft.trim();
+                if (t && onAddNew) {
+                  onAddNew(t);
+                  onChange(behavior.toggle(selected, t));
+                }
+                setAdding(false);
+                setDraft("");
+              }
+              if (e.key === "Escape") setAdding(false);
+            }}
+            style={{ ...fieldSelectStyle, fontSize: 11 }}
+          />
+        </div>
+      ) : (
+        <>
+          {list.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={isChecked(o.value)}
+              style={itemBtn(isChecked(o.value))}
+              onClick={() => onChange(behavior.toggle(selected, o.value))}
+            >
+              <span style={{ width: 14, flexShrink: 0, textAlign: "center", color: C.blue, fontSize: 11 }} aria-hidden>
+                {isChecked(o.value) ? "✓" : ""}
+              </span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
+            </button>
+          ))}
+          {onAddNew && (
+            <>
+              <div style={{ borderTop: `1px solid ${C.border}` }} />
+              <button type="button" style={{ ...itemBtn(false), color: C.blue, fontWeight: 700 }} onClick={() => setAdding(true)}>
+                + Add new…
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  ) : null;
+
+  const chipBtnStyle: React.CSSProperties = {
+    ...chipStyle,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 3,
+    maxWidth: "100%",
+    paddingRight: 2,
+  };
+
+  const displayValues = selected;
+
+  return (
+    <>
+      <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+        {label}
+        <button
+          ref={triggerRef}
+          type="button"
+          data-composer-select-trigger={menuZIndex >= COMPOSER_Z ? true : undefined}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (open) close();
+            else openMenu();
+          }}
+          style={{
+            ...fieldSelectStyle,
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            cursor: "pointer",
+            textAlign: "left",
+            pointerEvents: "auto",
+            minHeight: 28,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", minWidth: 0 }}>
+            {behavior.isEmptyDisplay(displayValues) ? (
+              <span style={{ color: "#9AA3B2", fontWeight: 600 }}>{behavior.emptyLabel}</span>
+            ) : (
+              displayValues.map((v) => (
+                <span
+                  key={v}
+                  style={chipBtnStyle}
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{v}</span>
+                  <span
+                    role="button"
+                    tabIndex={-1}
+                    aria-label={`Remove ${v}`}
+                    style={{ border: "none", background: "transparent", color: "#9AA3B2", cursor: "pointer", padding: "0 2px", fontSize: 12, lineHeight: 1 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onChange(behavior.remove(selected, v));
+                    }}
+                  >×</span>
+                </span>
+              ))
+            )}
+          </span>
+          <span style={{ color: "#9AA3B2", fontSize: 9, flexShrink: 0 }} aria-hidden>▾</span>
+        </button>
+      </label>
+      {typeof document !== "undefined" && menu ? createPortal(menu, document.body) : null}
+    </>
+  );
+}
+
 function CardComposerModal({
   mode,
   draft,
@@ -927,59 +1463,23 @@ function CardComposerModal({
               menuZIndex={COMPOSER_MENU_Z}
             />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <PortaledSelect
-                label="Data point"
-                value={draft.dataPoint || "N/A"}
+              <PortaledMultiSelect
+                label="Data source"
+                value={draft.dataPoints}
                 options={dataPoints.map((d) => ({ value: d, label: d }))}
-                onChange={(v) => onDraftChange({ dataPoint: v })}
+                onChange={(v) => onDraftChange({ dataPoints: v })}
                 onAddNew={onAddDataPoint}
                 menuZIndex={COMPOSER_MENU_Z}
               />
-              <div>
-                <PortaledSelect
-                  label="Impact"
-                  optional
-                  value={draft.impact?.type ?? ""}
-                  options={impacts.map((d) => ({ value: d, label: d }))}
-                  onChange={(v) => {
-                    if (!v) onDraftChange({ impact: null });
-                    else onDraftChange({ impact: v === HOURS_IMPACT_TYPE ? { type: v, hours: draft.impact?.hours ?? 1 } : { type: v } });
-                  }}
-                  onAddNew={onAddImpact}
-                  menuZIndex={COMPOSER_MENU_Z}
-                />
-                {draft.impact?.type === HOURS_IMPACT_TYPE && (
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={draft.impact.hours ?? ""}
-                    onChange={(e) => onDraftChange({ impact: { type: HOURS_IMPACT_TYPE, hours: Number(e.target.value) || 0 } })}
-                    placeholder="hrs/wk"
-                    style={{ ...fieldSelectStyle, marginTop: 4, width: 72 }}
-                  />
-                )}
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
-                Board X
-                <input
-                  type="number"
-                  value={Math.round(draft.x)}
-                  onChange={(e) => onDraftChange({ x: Number(e.target.value) || 0 })}
-                  style={fieldSelectStyle}
-                />
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
-                Board Y
-                <input
-                  type="number"
-                  value={Math.round(draft.y)}
-                  onChange={(e) => onDraftChange({ y: Number(e.target.value) || 0 })}
-                  style={fieldSelectStyle}
-                />
-              </label>
+              <PortaledMultiSelect
+                label="Impact"
+                value={draft.impacts}
+                options={impacts.map((d) => ({ value: d, label: d }))}
+                onChange={(v) => onDraftChange({ impacts: v })}
+                onAddNew={onAddImpact}
+                menuZIndex={COMPOSER_MENU_Z}
+                behavior={PLAIN_MULTI}
+              />
             </div>
           </div>
         </div>
@@ -1007,7 +1507,7 @@ function CardComposerModal({
 }
 
 function BoardCard({
-  c, isSelected, isDragging, isResizing, controlsOpen, linkDrawMode,
+  c, isSelected, isDragging, isResizing, controlsOpen, linkDrawMode, arrangeBy,
   onDown, onResizeDown, onConnectDown, onStartEdit,
   updateCard, duplicateCard, removeCard,
   themeOf, getCardAccent,
@@ -1018,6 +1518,7 @@ function BoardCard({
   isResizing: boolean;
   controlsOpen: boolean;
   linkDrawMode: boolean;
+  arrangeBy: ArrangeByKey;
   onDown: (e: React.PointerEvent, id: string) => void;
   onResizeDown: (e: React.PointerEvent, id: string) => void;
   onConnectDown: (e: React.PointerEvent, id: string) => void;
@@ -1037,9 +1538,10 @@ function BoardCard({
   const desc = cardDescription(c);
   const textRef = useRef<HTMLDivElement>(null);
   const [fitSize, setFitSize] = useState(maxFs);
-  const impLabel = impactLabel(c.impact);
-  const showDataChip = c.dataPoint && c.dataPoint !== "N/A";
-  const showImpactChip = !!impLabel;
+  const dataChipLabels = arrangeBy === "dataPoint" ? secondaryDataSources(c) : realDataPoints(c.dataPoints);
+  const showDataChips = dataChipLabels.length > 0;
+  const impactChipLabels = arrangeBy === "impact" ? secondaryImpacts(c) : c.impacts;
+  const showImpactChips = impactChipLabels.length > 0;
 
   const remeasure = useCallback(() => {
     const el = textRef.current;
@@ -1127,10 +1629,14 @@ function BoardCard({
             ref={textRef}
             style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word" }}
           >{desc}</div>
-          {(showDataChip || showImpactChip) && (
+          {(showDataChips || showImpactChips) && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0, marginTop: 6, flexWrap: "wrap" }}>
-              {showDataChip && <span style={chipStyle}>{c.dataPoint}</span>}
-              {showImpactChip && <span style={chipStyle}>{impLabel}</span>}
+              {dataChipLabels.map((dp) => (
+                <span key={dp} style={chipStyle}>{dp}</span>
+              ))}
+              {impactChipLabels.map((imp) => (
+                <span key={imp} style={chipStyle}>{imp}</span>
+              ))}
             </div>
           )}
         </div>
@@ -1392,6 +1898,211 @@ function cardDescription(c: { description?: string; text?: string }) {
 
 const CATEGORY_POPOVER_Z = 10000;
 const CARD_MENU_Z = CATEGORY_POPOVER_Z + 1;
+
+function ImpactIcon({ name }: { name: string }) {
+  const glyphs: Record<string, string> = {
+    "Time / effort": "T",
+    Cost: "$",
+    Quality: "Q",
+    "Risk / regulatory": "!",
+    [UNSPECIFIED_IMPACT]: "—",
+  };
+  const glyph = glyphs[name] ?? name.slice(0, 1).toUpperCase();
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 22,
+        height: 22,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 5,
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        fontSize: 10,
+        fontWeight: 800,
+        color: C.navy,
+        flexShrink: 0,
+      }}
+    >
+      {glyph}
+    </span>
+  );
+}
+
+function ImpactSectionColumns({ lanes }: { lanes: ImpactLane[] }) {
+  return (
+    <>
+      {lanes.map((lane, index) => (
+        <div
+          key={lane.impact}
+          style={{
+            position: "absolute",
+            left: SECTION_X0 + index * SECTION_COL_W,
+            top: 8,
+            width: SECTION_COL_W - 4,
+            pointerEvents: "none",
+            zIndex: 0,
+            boxSizing: "border-box",
+            padding: "0 4px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: `1px solid ${C.border}`,
+              background: C.white,
+              boxShadow: "0 2px 8px rgba(10,22,40,.06)",
+            }}
+          >
+            <ImpactIcon name={lane.impact} />
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: 12,
+                fontWeight: 700,
+                color: C.navy,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {lane.impact}
+            </span>
+            <span
+              aria-label={`${lane.count} cards`}
+              style={{
+                fontSize: 11,
+                fontWeight: 800,
+                color: C.navy,
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 999,
+                padding: "2px 8px",
+                minWidth: 24,
+                textAlign: "center",
+                flexShrink: 0,
+              }}
+            >
+              {lane.count}
+            </span>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function DataSourceIcon({ name }: { name: string }) {
+  const glyphs: Record<string, string> = {
+    SharePoint: "SP",
+    Excel: "XL",
+    Jira: "JR",
+    Confluence: "CF",
+    "Outlook/Email": "@",
+    Teams: "TM",
+    Planview: "PV",
+    ServiceNow: "SN",
+    [NA_DATA_POINT]: "—",
+  };
+  const glyph = glyphs[name] ?? name.slice(0, 2).toUpperCase();
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 22,
+        height: 22,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 5,
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        fontSize: 9,
+        fontWeight: 800,
+        color: C.navy,
+        flexShrink: 0,
+        letterSpacing: "-0.02em",
+      }}
+    >
+      {glyph}
+    </span>
+  );
+}
+
+function DataSourceSectionColumns({ lanes }: { lanes: DataSourceLane[] }) {
+  return (
+    <>
+      {lanes.map((lane, index) => (
+        <div
+          key={lane.source}
+          style={{
+            position: "absolute",
+            left: SECTION_X0 + index * SECTION_COL_W,
+            top: 8,
+            width: SECTION_COL_W - 4,
+            pointerEvents: "none",
+            zIndex: 0,
+            boxSizing: "border-box",
+            padding: "0 4px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: `1px solid ${C.border}`,
+              background: C.white,
+              boxShadow: "0 2px 8px rgba(10,22,40,.06)",
+            }}
+          >
+            <DataSourceIcon name={lane.source} />
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: 12,
+                fontWeight: 700,
+                color: C.navy,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {lane.source}
+            </span>
+            <span
+              aria-label={`${lane.count} cards`}
+              style={{
+                fontSize: 11,
+                fontWeight: 800,
+                color: C.navy,
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 999,
+                padding: "2px 8px",
+                minWidth: 24,
+                textAlign: "center",
+                flexShrink: 0,
+              }}
+            >
+              {lane.count}
+            </span>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
 
 function ThemeSectionColumns({ themes }: { themes: Theme[] }) {
   const columns: { key: string; label: string; color: string; index: number }[] = themes.map((t, i) => ({
@@ -1786,8 +2497,16 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const cards = activeBoard?.cards ?? [];
   const links = activeBoard?.links ?? [];
   const insight = activeBoard?.insight ?? "";
-  const arrangeBy: ArrangeByKey = activeBoard?.arrangeBy ?? "category";
+  const arrangeBy: ArrangeByKey = normalizeArrangeBy(activeBoard?.arrangeBy) ?? "category";
   const showLinkages = activeBoard?.showLinkages !== false;
+  const dataSourceLanes = useMemo(
+    () => (arrangeBy === "dataPoint" ? buildDataSourceLanes(cards as WorkshopCard[]) : []),
+    [arrangeBy, cards],
+  );
+  const impactLanes = useMemo(
+    () => (arrangeBy === "impact" ? buildImpactLanes(cards as WorkshopCard[]) : []),
+    [arrangeBy, cards],
+  );
 
   const boardCtxRef = useRef({ boards, activeId });
   boardCtxRef.current = { boards, activeId };
@@ -1841,7 +2560,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
 
   const [text, setText] = useState("");
   const [theme, setTheme] = useState("accelerate");
-  const [provider, setProvider] = useState<AIProvider>("claude");
+  const [aiToast, setAiToast] = useState<string | null>(null);
   const [busy, setBusy] = useState({ review: false, links: false, ideas: false, compare: false });
   const [showPack, setShowPack] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
@@ -1891,6 +2610,16 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     setCollapsed((c) => ({ ...c, [key]: !c[key] }));
   };
 
+  const showAiError = useCallback((detail?: string) => {
+    setAiToast(aiErrorMessage(DEFAULT_AI_PROVIDER, detail));
+  }, []);
+
+  useEffect(() => {
+    if (!aiToast) return;
+    const t = setTimeout(() => setAiToast(null), 5500);
+    return () => clearTimeout(t);
+  }, [aiToast]);
+
   zoomPanRef.current = { zoom, panX: pan.x, panY: pan.y };
 
   useEffect(() => {
@@ -1900,7 +2629,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         setBoards(session.boards);
         setActiveId(session.activeId);
         setThemes(mergeThemes(session.customThemes));
-        setDataPoints(mergeStringOptions(DEFAULT_DATA_POINTS, session.customDataPoints));
+        setDataPoints(mergeStringOptions(DEFAULT_DATA_POINTS, session.customDataPoints, { appendNa: true }));
         setImpacts(mergeStringOptions(DEFAULT_IMPACTS, session.customImpacts));
         const active = session.boards.find((b) => b.id === session.activeId) ?? session.boards[0];
         setZoom(active?.zoom ?? 1);
@@ -2001,8 +2730,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       theme: th,
       text: txt,
       description: txt,
-      dataPoint: "N/A",
-      impact: null,
+      dataPoints: [NA_DATA_POINT],
+      impacts: [],
       x: opts.pos?.x ?? SECTION_X0 + col * SECTION_COL_W + Math.random() * 40,
       y: opts.pos?.y ?? 320 + Math.random() * 140,
       ai: !!opts.ai,
@@ -2041,19 +2770,26 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       if (!prev || prev.mode !== "create" || prev.aiRan) return prev;
       return { ...prev, aiRan: true, draft: { ...prev.draft, classifying: true } };
     });
-    const patch = await fetchClassifyFields(seed, currentTheme, { dataPoints, impacts, themes, provider });
-    if (composerClassifyRef.current !== reqId) return;
-    setComposer((prev) => {
-      if (!prev) return null;
-      const nextDraft = { ...prev.draft, ...patch, classifying: false };
-      if (patch.theme && prev.draft.theme == null && themes.some((t) => t.id === patch.theme)) {
-        const col = columnIndex(patch.theme, themes);
-        nextDraft.theme = patch.theme;
-        nextDraft.x = SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40;
+    try {
+      const { patch, error } = await fetchClassifyFields(seed, currentTheme, { dataPoints, impacts, themes, provider: DEFAULT_AI_PROVIDER });
+      if (error) showAiError(error);
+      if (composerClassifyRef.current !== reqId) return;
+      setComposer((prev) => {
+        if (!prev) return null;
+        const nextDraft = { ...prev.draft, ...patch, classifying: false };
+        if (patch.theme && prev.draft.theme == null && themes.some((t) => t.id === patch.theme)) {
+          const col = columnIndex(patch.theme, themes);
+          nextDraft.theme = patch.theme;
+          nextDraft.x = SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40;
+        }
+        return { ...prev, draft: nextDraft };
+      });
+    } catch {
+      if (composerClassifyRef.current === reqId) {
+        setComposer((prev) => (prev ? { ...prev, draft: { ...prev.draft, classifying: false } } : null));
       }
-      return { ...prev, draft: nextDraft };
-    });
-  }, [dataPoints, impacts, themes, provider]);
+    }
+  }, [dataPoints, impacts, themes, showAiError]);
 
   useEffect(() => {
     if (!composer || composer.mode !== "create" || composer.aiRan) return;
@@ -2085,8 +2821,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         text: final.text,
         description: final.description,
         theme: final.theme,
-        dataPoint: final.dataPoint,
-        impact: final.impact,
+        dataPoints: final.dataPoints,
+        impacts: final.impacts,
         x: final.x,
         y: final.y,
         ai: final.ai,
@@ -2422,10 +3158,19 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   async function runReview() {
     if (busy.review || !cards.length) return;
     setBusy((b) => ({ ...b, review: true }));
-    const { system, content } = reviewPrompt();
-    const out = await callAI(system, content, provider);
-    setInsight(out || "— AI review unavailable right now. Capture and save are still working normally.");
-    setBusy((b) => ({ ...b, review: false }));
+    console.log(`[board-ai] review → provider: ${DEFAULT_AI_PROVIDER}`);
+    try {
+      const { system, content } = reviewPrompt();
+      const { text, error } = await callAIResult(system, content, DEFAULT_AI_PROVIDER);
+      if (error) {
+        showAiError(error);
+        setInsight("—");
+      } else {
+        setInsight(text || "—");
+      }
+    } finally {
+      setBusy((b) => ({ ...b, review: false }));
+    }
   }
 
   async function compareModels() {
@@ -2435,52 +3180,74 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     const loading = { text: "", loading: true };
     setCompareResults({ claude: { ...loading }, gemini: { ...loading }, gpt: { ...loading } });
     const { system, content } = buildComparePrompt(cards, resolveThemeLabel);
-    const results = await Promise.all(
-      AI_PROVIDERS.map(async ({ id }) => {
-        const { text, error } = await callAIResult(system, content, id);
-        return { id, text: text || (error ? `— ${error}` : "— No response"), error };
-      })
-    );
-    const mapped = {} as Record<AIProvider, { text: string; error?: string; loading?: boolean }>;
-    results.forEach((r) => { mapped[r.id] = { text: r.text, error: r.error, loading: false }; });
-    setCompareResults(mapped);
-    setBusy((b) => ({ ...b, compare: false }));
+    try {
+      const results = await Promise.all(
+        AI_PROVIDERS.map(async ({ id }) => {
+          console.log(`[board-ai] compare → provider: ${id}`);
+          const { text, error } = await callAIResult(system, content, id);
+          return { id, text: text || (error ? `— ${error}` : "— No response"), error };
+        })
+      );
+      const mapped = {} as Record<AIProvider, { text: string; error?: string; loading?: boolean }>;
+      results.forEach((r) => { mapped[r.id] = { text: r.text, error: r.error, loading: false }; });
+      setCompareResults(mapped);
+    } finally {
+      setBusy((b) => ({ ...b, compare: false }));
+    }
   }
 
   async function mapLinks() {
     if (busy.links || cards.length < 2) return;
     setBusy((b) => ({ ...b, links: true }));
-    const { system, content } = buildLinkagesPrompt(cards);
-    const out = await callAI(system, content, provider);
-    const arr = parseJSON(out);
-    if (Array.isArray(arr)) {
-      const ids = new Set(cards.map((c) => c.id));
-      const aiLinks = arr
-        .filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b)
-        .map((p: any) => ({
-          ...p,
-          id: newLinkId(),
-          color: C.blue,
-          style: "solid" as const,
-        }));
-      setLinks((l) => [...l.filter((x) => x.manual), ...aiLinks]);
+    console.log(`[board-ai] map-linkages → provider: ${DEFAULT_AI_PROVIDER}`);
+    try {
+      const { system, content } = buildLinkagesPrompt(cards);
+      const { text, error } = await callAIResult(system, content, DEFAULT_AI_PROVIDER);
+      if (error) {
+        showAiError(error);
+      } else {
+        const arr = parseJSON(text);
+        if (Array.isArray(arr)) {
+          const ids = new Set(cards.map((c) => c.id));
+          const aiLinks = arr
+            .filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b)
+            .map((p: any) => ({
+              ...p,
+              id: newLinkId(),
+              color: C.blue,
+              style: "solid" as const,
+            }));
+          setLinks((l) => [...l.filter((x) => x.manual), ...aiLinks]);
+        }
+      }
+    } finally {
+      setBusy((b) => ({ ...b, links: false }));
     }
-    setBusy((b) => ({ ...b, links: false }));
   }
 
-  async function suggestIdeas() {
-    if (busy.ideas) return;
+  async function runSuggestForCategory(categoryId: string) {
     setBusy((b) => ({ ...b, ideas: true }));
-    setShowSuggestPicker(true);
-    setSuggestCategory(theme);
     setSelectedSuggestProvider(null);
     const loading: SuggestCandidate = { text: "", loading: true };
     setSuggestCandidates({ claude: { ...loading }, gemini: { ...loading }, gpt: { ...loading } });
 
-    const { system, content } = buildSingleSuggestPrompt(cards, resolveThemeLabel);
+    const categoryName = resolveThemeLabel(categoryId);
+    const challengesBoard = getChallengesBoard(boards);
+    const aiBoard = findAiUseCasesBoard(boards);
+    const challengeCards = challengesBoard?.cards ?? [];
+    const suggestedCards = aiBoard?.cards ?? [];
+    const categorySuggestedCards = suggestedCards.filter((c) => c.theme === categoryId);
+    const { system, content } = buildSingleSuggestPrompt(
+      challengeCards,
+      suggestedCards,
+      categoryName,
+      categorySuggestedCards,
+      resolveThemeLabel,
+    );
 
     const tasks = AI_PROVIDERS.map(({ id }) =>
       callAIResult(system, content, id).then(({ text, error }) => {
+        console.log(`[board-ai] suggest-use-case → provider: ${id}, category: ${categoryName}`);
         const candidate = parseSuggestCandidate(text, error);
         setSuggestCandidates((prev) => ({
           ...(prev ?? { claude: loading, gemini: loading, gpt: loading }),
@@ -2496,6 +3263,18 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     setBusy((b) => ({ ...b, ideas: false }));
   }
 
+  async function suggestIdeas() {
+    if (busy.ideas) return;
+    setShowSuggestPicker(true);
+    setSuggestCategory(theme);
+    await runSuggestForCategory(theme);
+  }
+
+  const onSuggestCategoryChange = (categoryId: string) => {
+    setSuggestCategory(categoryId);
+    if (showSuggestPicker && !busy.ideas) void runSuggestForCategory(categoryId);
+  };
+
   const closeSuggestPicker = () => {
     setShowSuggestPicker(false);
     setSuggestCandidates(null);
@@ -2506,7 +3285,29 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     if (!selectedSuggestProvider || !suggestCandidates) return;
     const candidate = suggestCandidates[selectedSuggestProvider];
     if (!candidate?.text || candidate.error) return;
-    openComposerCreate({ text: candidate.text, theme: suggestCategory, ai: true });
+
+    const col = columnIndex(suggestCategory, themes);
+    const card: WorkshopCard = {
+      id: newId(),
+      theme: suggestCategory,
+      text: candidate.text,
+      description: candidate.justification
+        ? `${candidate.text}\n\n${candidate.justification}`
+        : candidate.text,
+      dataPoints: [NA_DATA_POINT],
+      impacts: [],
+      x: SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40,
+      y: 320 + Math.random() * 140,
+      ai: true,
+      classifying: false,
+    };
+
+    const { boards: nextBoards, boardId } = ensureAiUseCasesBoard(boardSnapshot(boards, activeId, zoom, pan));
+    setBoards(
+      nextBoards.map((b) => (b.id === boardId ? { ...b, cards: [...b.cards, card] } : b))
+    );
+    setActiveId(boardId);
+    setSelectedId(card.id);
     closeSuggestPicker();
   };
 
@@ -2527,6 +3328,29 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.surface, position: "relative", overflow: "hidden" }}>
+      {aiToast && (
+        <div
+          role="alert"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 100,
+            background: C.navy,
+            color: C.white,
+            fontSize: 13,
+            fontWeight: 600,
+            padding: "10px 18px",
+            borderRadius: 10,
+            boxShadow: "0 12px 32px rgba(10,22,40,.25)",
+            maxWidth: "min(420px, 92vw)",
+            textAlign: "center",
+          }}
+        >
+          {aiToast}
+        </div>
+      )}
       {collapsed.top && (
         <button
           type="button"
@@ -2558,9 +3382,6 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
             />
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <select value={provider} onChange={(e) => setProvider(e.target.value as AIProvider)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 10px", fontSize: 13, color: C.navy, background: C.white, fontWeight: 600 }}>
-              {AI_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-            </select>
             <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
             <QuestionsNavLink style={{ textDecoration: "none" }} />
             <AskButton />
@@ -2587,8 +3408,20 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               <InfoButton
                 align="right"
                 title="Suggest use case"
-                description="Asks Claude, Gemini, and GPT each for one use-case idea from the board. Pick your favourite, choose a category, then add a single card."
-                prompt={() => buildSingleSuggestPrompt(cards, resolveThemeLabel)}
+                description="Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board."
+                prompt={() => {
+                  const challengesBoard = getChallengesBoard(boards);
+                  const aiBoard = findAiUseCasesBoard(boards);
+                  const suggested = aiBoard?.cards ?? [];
+                  const categoryName = resolveThemeLabel(theme);
+                  return buildSingleSuggestPrompt(
+                    challengesBoard?.cards ?? [],
+                    suggested,
+                    categoryName,
+                    suggested.filter((c) => c.theme === theme),
+                    resolveThemeLabel,
+                  );
+                }}
               />
             </span>
             <label style={{ ...btn.ai(C.navy), display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
@@ -2678,7 +3511,13 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               transformOrigin: "0 0",
             }}
           >
-            <ThemeSectionColumns themes={themes} />
+            {arrangeBy === "dataPoint" ? (
+              <DataSourceSectionColumns lanes={dataSourceLanes} />
+            ) : arrangeBy === "impact" ? (
+              <ImpactSectionColumns lanes={impactLanes} />
+            ) : (
+              <ThemeSectionColumns themes={themes} />
+            )}
             <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible", zIndex: 1 }}>
               {showLinkages && links.map((l) => {
                 const link = l as LinkData;
@@ -2739,6 +3578,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               <BoardCard
                 key={c.id}
                 c={c}
+                arrangeBy={arrangeBy}
                 isSelected={selectedId === c.id}
                 isDragging={drag?.id === c.id}
                 isResizing={resize?.id === c.id}
@@ -2824,7 +3664,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                   <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={submit}>Add</button>
                   <InfoButton
                     title="Add card"
-                    description="Adds a card immediately, then AI expands it into a description and guesses the data point and impact. All fields stay fully editable on the card."
+                    description="Adds a card immediately, then AI expands it into a description and guesses the data source and impact. All fields stay fully editable on the card."
                     prompt={() => buildClassifyPrompt(text.trim() || "Example pain point", {
                       dataPoints,
                       impacts,
@@ -2962,7 +3802,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
           selected={selectedSuggestProvider}
           onSelect={setSelectedSuggestProvider}
           category={suggestCategory}
-          onCategoryChange={setSuggestCategory}
+          loading={busy.ideas}
+          onCategoryChange={onSuggestCategoryChange}
           themes={themes}
           onAdd={confirmSuggestPick}
           onClose={closeSuggestPicker}
@@ -2980,6 +3821,7 @@ function SuggestPickerModal({
   selected,
   onSelect,
   category,
+  loading,
   onCategoryChange,
   themes,
   onAdd,
@@ -2989,6 +3831,7 @@ function SuggestPickerModal({
   selected: AIProvider | null;
   onSelect: (id: AIProvider) => void;
   category: string;
+  loading?: boolean;
   onCategoryChange: (id: string) => void;
   themes: Theme[];
   onAdd: () => void;
@@ -2997,14 +3840,19 @@ function SuggestPickerModal({
   const selectedCandidate = selected && candidates ? candidates[selected] : null;
   const canAdd = !!(selectedCandidate?.text && !selectedCandidate.error && !selectedCandidate.loading);
 
+  const categoryLabel = themes.find((t) => t.id === category)?.label ?? category;
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(10,22,40,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }} onClick={onClose}>
-      <div style={{ background: C.white, borderRadius: 16, padding: 30, width: "min(720px, 96%)", maxHeight: "88vh", overflow: "auto", boxShadow: "0 30px 80px rgba(10,22,40,.3)" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+      <div style={{ background: C.white, borderRadius: 16, padding: 30, width: "min(960px, 96%)", maxHeight: "88vh", overflow: "auto", boxShadow: "0 30px 80px rgba(10,22,40,.3)" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <h2 style={{ fontFamily: display, color: C.navy, margin: 0, fontSize: 22 }}>Pick a use case</h2>
           <button style={btn.ghost} onClick={onClose}>Cancel</button>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <p style={{ fontSize: 13, color: "#7A8499", margin: "0 0 18px", lineHeight: 1.45 }}>
+          Task-level ideas for: <strong style={{ color: C.navy }}>{categoryLabel}</strong>
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
           {AI_PROVIDERS.map(({ id, label }) => {
             const col = candidates?.[id];
             const borderCol = PROVIDER_COLORS[id];
@@ -3018,8 +3866,9 @@ function SuggestPickerModal({
                 onClick={() => selectable && onSelect(id)}
                 style={{
                   display: "flex",
+                  flexDirection: "column",
                   alignItems: "flex-start",
-                  gap: 12,
+                  gap: 8,
                   textAlign: "left",
                   width: "100%",
                   border: `${isSelected ? 2.5 : 1.5}px solid ${isSelected ? borderCol : C.border}`,
@@ -3029,6 +3878,7 @@ function SuggestPickerModal({
                   cursor: selectable ? "pointer" : "default",
                   fontFamily: "inherit",
                   opacity: col?.loading ? 0.85 : 1,
+                  minHeight: 140,
                 }}
               >
                 <span
@@ -3039,25 +3889,25 @@ function SuggestPickerModal({
                     border: `2px solid ${isSelected ? borderCol : C.border}`,
                     background: isSelected ? borderCol : C.white,
                     flexShrink: 0,
-                    marginTop: 2,
                     boxSizing: "border-box",
                   }}
                   aria-hidden
                 />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: C.white, background: borderCol, padding: "2px 8px", borderRadius: 999 }}>{label}</span>
-                  </div>
-                  {col?.loading ? (
-                    <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>Loading…</p>
-                  ) : col?.error ? (
-                    <p style={{ color: C.coral, fontSize: 13, margin: 0 }}>Couldn't generate</p>
-                  ) : col?.text ? (
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.white, background: borderCol, padding: "2px 8px", borderRadius: 999 }}>{label}</span>
+                {col?.loading ? (
+                  <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>Loading…</p>
+                ) : col?.error ? (
+                  <p style={{ color: C.coral, fontSize: 13, margin: 0 }}>Couldn&apos;t generate — check API key</p>
+                ) : col?.text ? (
+                  <>
                     <p style={{ fontSize: 14, lineHeight: 1.45, color: C.navy, margin: 0 }}>{col.text}</p>
-                  ) : (
-                    <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>No response</p>
-                  )}
-                </div>
+                    {col.justification && (
+                      <p style={{ fontSize: 12, lineHeight: 1.4, color: "#7A8499", margin: 0 }}>{col.justification}</p>
+                    )}
+                  </>
+                ) : (
+                  <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>No response</p>
+                )}
               </button>
             );
           })}
@@ -3067,6 +3917,7 @@ function SuggestPickerModal({
             Category
             <select
               value={category}
+              disabled={loading}
               onChange={(e) => onCategoryChange(e.target.value)}
               style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, color: C.navy, background: C.white, fontWeight: 600 }}
             >
@@ -3120,6 +3971,18 @@ function CompareModal({ results, loading, onClose }: {
   );
 }
 
+function takeawayDataSourcesLine(dataPoints: unknown): string | null {
+  const summary = formatDataSourcesSummary(normalizeDataPoints(dataPoints));
+  if (!summary) return null;
+  return `Data sources: ${summary}`;
+}
+
+function takeawayImpactsLine(raw: unknown, legacy?: { type?: string } | null): string | null {
+  const summary = formatImpactsSummary(normalizeImpacts(raw, legacy));
+  if (!summary) return null;
+  return `Impact: ${summary}`;
+}
+
 function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insight: string; themes: Theme[] }) {
   const knownIds = new Set(themes.map((t) => t.id));
   return (
@@ -3133,8 +3996,8 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
             <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => {
               const desc = cardDescription(c);
               const meta = [
-                c.dataPoint && c.dataPoint !== "N/A" ? c.dataPoint : null,
-                impactLabel(c.impact) || null,
+                takeawayDataSourcesLine(c.dataPoints ?? c.dataPoint),
+                takeawayImpactsLine(c.impacts ?? c.impact, c.impact),
               ].filter(Boolean).join(" · ");
               return (
                 <li key={c.id} style={{ color: C.navy, marginBottom: 6 }}>
@@ -3156,8 +4019,8 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
             <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => {
               const desc = cardDescription(c);
               const meta = [
-                c.dataPoint && c.dataPoint !== "N/A" ? c.dataPoint : null,
-                impactLabel(c.impact) || null,
+                takeawayDataSourcesLine(c.dataPoints ?? c.dataPoint),
+                takeawayImpactsLine(c.impacts ?? c.impact, c.impact),
               ].filter(Boolean).join(" · ");
               return (
                 <li key={c.id} style={{ color: C.navy, marginBottom: 6 }}>

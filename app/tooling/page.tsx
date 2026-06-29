@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { C, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON } from "@/components/brand";
+import { C, SmartCoLogo, MUFGLogo, Corner, callAIResult, parseJSON, type AIProvider } from "@/components/brand";
 import { AskButton } from "@/components/AskPanel";
 import { QuestionsNavLink } from "@/components/QuestionsNavLink";
 import { useRegisterAskContext } from "@/components/AskContext";
@@ -37,9 +37,18 @@ type Briefing = {
 type ToolResearch = {
   expanded: boolean;
   loading: boolean;
-  claudeHint?: boolean;
+  provider?: AIProvider;
+  briefing?: Briefing;
   gemini?: Briefing;
   gpt?: Briefing;
+};
+
+const DEFAULT_AI_PROVIDER: AIProvider = "claude";
+
+const PROVIDER_LABELS: Record<AIProvider, string> = {
+  claude: "Claude",
+  gemini: "Gemini",
+  gpt: "GPT",
 };
 
 let tid = 0;
@@ -143,15 +152,13 @@ function BriefingPanel({ briefing, label }: { briefing: Briefing; label: string 
 }
 
 function ToolCard({
-  tool, research, researchModel, onEdit, onDelete, onResearch, onResearchGemini, onToggleExpand,
+  tool, research, onEdit, onDelete, onResearch, onToggleExpand,
 }: {
   tool: Tool;
   research?: ToolResearch;
-  researchModel: ResearchModel;
   onEdit: (tool: Tool) => void;
   onDelete: (id: string) => void;
   onResearch: (id: string) => void;
-  onResearchGemini: (id: string) => void;
   onToggleExpand: (id: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -196,19 +203,11 @@ function ToolCard({
             </button>
             <InfoButton
               title="Research with AI"
-              description="Runs live web research on this tool using Gemini or GPT (selected in the page header). Returns a structured briefing with sources when grounding succeeds."
+              description="Runs live web research on this tool using the AI provider selected on the board (or compare mode below). Returns a structured briefing with sources when grounding succeeds."
               note="Verify pricing, feature availability, MCP support and roadmap claims against the cited vendor source before quoting externally."
               prompt={() => buildToolingResearchPrompt(tool)}
             />
-            {research?.claudeHint && (
-              <div style={{ width: "100%", fontSize: 12, color: C.navy, padding: "8px 10px", background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` }}>
-                Live search needs Gemini or GPT — Claude returns model-only knowledge.{" "}
-                <button type="button" style={{ ...btn.ghost, padding: "4px 10px", fontSize: 12, marginLeft: 4 }} onClick={() => onResearchGemini(tool.id)}>
-                  Run on Gemini
-                </button>
-              </div>
-            )}
-            {(research?.gemini || research?.gpt) && (
+            {(research?.briefing || research?.gemini || research?.gpt) && (
               <button style={btn.ghost} onClick={() => onToggleExpand(tool.id)}>
                 {research?.expanded ? "Hide briefing" : "Show briefing"}
               </button>
@@ -216,9 +215,12 @@ function ToolCard({
             <button style={btn.ghost} onClick={() => { setDraft(tool); setEditing(true); }}>Edit</button>
             <button style={btn.danger} onClick={() => onDelete(tool.id)}>Delete</button>
           </div>
-          {research?.expanded && (research.gemini || research.gpt) && (
+          {research?.expanded && (research.briefing || research.gemini || research.gpt) && (
             <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
               <div style={{ display: "flex", gap: 16, flexDirection: (research.gemini && research.gpt) ? "row" : "column", flexWrap: "wrap" }}>
+                {research.briefing && research.provider && (
+                  <BriefingPanel briefing={research.briefing} label={PROVIDER_LABELS[research.provider]} />
+                )}
                 {research.gemini && (
                   <BriefingPanel briefing={research.gemini} label="Gemini" />
                 )}
@@ -249,10 +251,11 @@ export default function ToolingPage() {
   const [tools, setTools] = useState<Tool[]>(SEED_TOOLS);
   const [ops, setOps] = useState<string[]>([]);
   const [loadingOps, setLoadingOps] = useState(false);
-  const [researchModel, setResearchModel] = useState<ResearchModel>("gemini");
+  const [researchModel, setResearchModel] = useState<ResearchModel>("claude");
   const [research, setResearch] = useState<Record<string, ToolResearch>>({});
   const [showCompare, setShowCompare] = useState(false);
   const [compareTool, setCompareTool] = useState<Tool | null>(null);
+  const [aiToast, setAiToast] = useState<string | null>(null);
   const loaded = useRef(false);
   const toolsRef = useRef(tools);
   toolsRef.current = tools;
@@ -267,6 +270,21 @@ export default function ToolingPage() {
   });
 
   const [form, setForm] = useState({ name: "", cat: "", scope: "Platform" as ToolScope, use: "" });
+
+  useEffect(() => {
+    if (!aiToast) return;
+    const t = setTimeout(() => setAiToast(null), 5500);
+    return () => clearTimeout(t);
+  }, [aiToast]);
+
+  const showProviderError = (provider: AIProvider, detail?: string) => {
+    const name = PROVIDER_LABELS[provider];
+    const d = (detail ?? "").toLowerCase();
+    const msg = !detail || d.includes("api key") || d.includes("not configured") || d.includes("missing")
+      ? `${name}: API key missing or request failed`
+      : `${name}: ${detail}`;
+    setAiToast(msg);
+  };
 
   useEffect(() => {
     (async () => {
@@ -335,46 +353,47 @@ export default function ToolingPage() {
     });
   };
 
-  const runResearchForProvider = useCallback(async (tool: Tool, provider: "gemini" | "gpt") => {
+  const runResearchForProvider = useCallback(async (tool: Tool, provider: AIProvider) => {
+    console.log(`[tooling-ai] research → provider: ${provider}`);
     const { system, content } = buildToolingResearchPrompt(tool);
     const result = await callAIResult(system, content, provider, { search: true, timeoutMs: 30000 });
     return parseBriefing(result);
   }, []);
 
-  const researchTool = async (toolId: string, forceProvider?: "gemini" | "gpt") => {
+  const researchTool = async (toolId: string) => {
     const tool = tools.find((t) => t.id === toolId);
     if (!tool) return;
 
-    if (!forceProvider && researchModel === "claude") {
-      setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], claudeHint: true, loading: false, expanded: false } }));
-      return;
-    }
-
-    if (researchModel === "both" && !forceProvider) {
+    if (researchModel === "both") {
       setCompareTool(tool);
       setShowCompare(true);
-      setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true, claudeHint: false } }));
-      const [gemini, gpt] = await Promise.all([
-        runResearchForProvider(tool, "gemini"),
-        runResearchForProvider(tool, "gpt"),
-      ]);
-      setResearch((r) => ({
-        ...r,
-        [toolId]: { expanded: true, loading: false, claudeHint: false, gemini, gpt },
-      }));
+      setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true, briefing: undefined, provider: undefined } }));
+      try {
+        const [gemini, gpt] = await Promise.all([
+          runResearchForProvider(tool, "gemini"),
+          runResearchForProvider(tool, "gpt"),
+        ]);
+        setResearch((r) => ({
+          ...r,
+          [toolId]: { expanded: true, loading: false, gemini, gpt },
+        }));
+      } finally {
+        setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: false } }));
+      }
       return;
     }
 
-    const provider = forceProvider || (researchModel === "gpt" ? "gpt" : "gemini");
-    setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true, claudeHint: false } }));
+    const provider = researchModel;
+    setResearch((r) => ({ ...r, [toolId]: { ...r[toolId], loading: true, expanded: true, gemini: undefined, gpt: undefined } }));
     const briefing = await runResearchForProvider(tool, provider);
+    if (briefing.error) showProviderError(provider, briefing.error);
     setResearch((r) => ({
       ...r,
       [toolId]: {
         expanded: true,
         loading: false,
-        claudeHint: false,
-        ...(provider === "gemini" ? { gemini: briefing } : { gpt: briefing }),
+        provider,
+        briefing,
       },
     }));
   };
@@ -388,16 +407,24 @@ export default function ToolingPage() {
 
   async function findOpportunities() {
     setLoadingOps(true);
+    console.log(`[tooling-ai] linkage-opportunities → provider: ${DEFAULT_AI_PROVIDER}`);
     const sys =
       "You are a delivery-engineering consultant. Given a financial-services PMO's current tools and the gaps between them, return ONLY a JSON array of 4 strings. " +
       "Each string is a concrete opportunity to link or automate across these specific tools (name the tools), <=16 words, no preamble.";
     const body = `Tools:\n${tools.map((t) => `${t.name} (${t.scope}) — ${t.use}`).join("\n")}\n\nGaps:\n${GAPS.join("\n")}`;
-    const out = await callAI(sys, body);
-    try {
-      const arr = JSON.parse(out.replace(/```json|```/g, "").trim());
-      if (Array.isArray(arr)) setOps(arr.slice(0, 4));
-    } catch {
-      setOps(["AI linkage suggestions unavailable right now — try again."]);
+    const { text, error } = await callAIResult(sys, body, DEFAULT_AI_PROVIDER);
+    if (error) {
+      showProviderError(DEFAULT_AI_PROVIDER, error);
+      setOps([]);
+    } else {
+      try {
+        const arr = JSON.parse(text.replace(/```json|```/g, "").trim());
+        if (Array.isArray(arr)) setOps(arr.slice(0, 4));
+        else setOps([]);
+      } catch {
+        setOps([]);
+        showProviderError(DEFAULT_AI_PROVIDER, "could not parse response");
+      }
     }
     setLoadingOps(false);
   }
@@ -406,6 +433,29 @@ export default function ToolingPage() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.surface, fontFamily: "var(--font-dm-sans), system-ui, sans-serif", color: C.navy, position: "relative", overflow: "hidden" }}>
+      {aiToast && (
+        <div
+          role="alert"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 100,
+            background: C.navy,
+            color: C.white,
+            fontSize: 13,
+            fontWeight: 600,
+            padding: "10px 18px",
+            borderRadius: 10,
+            boxShadow: "0 12px 32px rgba(10,22,40,.25)",
+            maxWidth: "min(420px, 92vw)",
+            textAlign: "center",
+          }}
+        >
+          {aiToast}
+        </div>
+      )}
       <Corner />
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 40px", background: C.white, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -470,11 +520,9 @@ export default function ToolingPage() {
               key={t.id}
               tool={t}
               research={research[t.id]}
-              researchModel={researchModel}
               onEdit={updateTool}
               onDelete={deleteTool}
               onResearch={researchTool}
-              onResearchGemini={(id) => researchTool(id, "gemini")}
               onToggleExpand={toggleExpand}
             />
           ))}

@@ -12,15 +12,6 @@ export type PhaseBlock = { title: string; label: string; items: string[] };
 
 export type FocusArea = { title: string; level: string; desc: string };
 
-export type Engagement = {
-  sector: string;
-  maturity: string;
-  data: string;
-  doing: string;
-  length: string;
-  value: string;
-};
-
 export type NextStepCard = { title: string; desc: string };
 
 export type CredentialCard = { title: string; desc: string };
@@ -69,9 +60,6 @@ export type DeckSlide =
       kind: "track-record";
       eyebrow: string;
       title: string;
-      engagements: Engagement[];
-      signalTitle: string;
-      signalBody: string;
     }
   | {
       kind: "next-steps";
@@ -236,65 +224,6 @@ export const DECK: DeckSlide[] = [
     kind: "track-record",
     eyebrow: "TRACK RECORD",
     title: "Where we've made a difference",
-    engagements: [
-      {
-        sector: "Financial services / Markets infrastructure",
-        maturity: "Medium (developing)",
-        data: "Data captured and stored, but no intelligence layer on top",
-        doing:
-          "PMO Intelligence Environment — AI status reporting, predictive lessons-learned, financial control mismatch detection. Built in their environment, owned by them.",
-        length: "Free discovery → POC (~3 months) → full build",
-        value: "First POC output in weeks; proven enough to commit a £400k full-build budget for next year",
-      },
-      {
-        sector: "Financial services / Post-trade",
-        maturity: "Advanced (4 of 5 dots filled)",
-        data: "Strong data and reporting already in place; ready for a predictive layer",
-        doing:
-          "An intelligence layer on top of the change portfolio — predictive insights and automated triggers that surface risk, slippage and regulatory change before it lands, rather than reporting it after the fact",
-        length: "Discovery → rolling POCs (~4 months, ongoing)",
-        value: "Shift from reactive reporting to early-warning — issues caught before they escalate",
-      },
-      {
-        sector: "Consumer goods / Divestiture programme",
-        maturity: "Emerging",
-        data: "High-volume contract data, unstructured and siloed",
-        doing:
-          "AI contract analysis supporting divestitures — reading and comparing terms at scale during separation",
-        length: "Focused engagement (~6 weeks)",
-        value: "Accelerated contract review and due-diligence timelines",
-      },
-      {
-        sector: "Financial services / Universal bank",
-        maturity: "Emerging (2 of 5 dots filled)",
-        data: "Workforce and location data fragmented across systems",
-        doing:
-          "Workshop-led engagement on AI workforce and location decisioning, with a proposition to become their programme delivery partner for the next 12 months",
-        length: "Workshop → 12-month programme partnership (proposed)",
-        value:
-          "Structured, data-driven basis for resourcing calls previously made on judgement, and a path to an ongoing partnership",
-      },
-      {
-        sector: "Financial services / Asset management",
-        maturity: "Low (early)",
-        data: "Largely manual reporting; data in spreadsheets and email",
-        doing: "Discovery workshop scoping AI reporting and assurance opportunities ahead of a build",
-        length: "Free discovery workshop (2 sessions)",
-        value: "Clear, costed roadmap and prioritised use-case backlog",
-      },
-      {
-        sector: "Financial services / Insurance",
-        maturity: "Medium (3 of 5 dots filled)",
-        data: "Good operational data, fragmented procurement and operating model",
-        doing:
-          "AI procurement overhaul — redesigning the procurement process and rebuilding the target operating model around AI",
-        length: "Discovery → process + TOM rebuild (~3 months)",
-        value: "Leaner, AI-enabled procurement and a TOM fit for an AI operating model",
-      },
-    ],
-    signalTitle: "THE SIGNAL · £400k",
-    signalBody:
-      "One financial services client has moved from proof-of-concept to a £400,000 full-build budget for next year. Prove value fast, then fund the scale — built in their environment, owned by them, no licences.",
   },
 
   {

@@ -8,6 +8,9 @@ export type CaptureCard = {
   theme?: string | null;
   description?: string;
   dataPoint?: string;
+  dataPoints?: string[];
+  impacts?: string[];
+  /** @deprecated legacy single impact */
   impact?: { type: string; hours?: number } | null;
   classifying?: boolean;
 };
@@ -36,17 +39,38 @@ const RESEARCH_SYSTEM =
   '"pricing" (licensing model and rough price bands), "marketChanges" (recent launches, acquisitions, competitive moves). ' +
   "Each value: 2–4 concise sentences citing what you found. If uncertain, say so.";
 
+function dataPointsForCard(c: CaptureCard): string[] {
+  if (c.dataPoints?.length) {
+    return c.dataPoints.filter((d) => d !== "N/A");
+  }
+  if (c.dataPoint && c.dataPoint !== "N/A") return [c.dataPoint];
+  return [];
+}
+
+function impactsForCard(c: CaptureCard): string[] {
+  if (c.impacts?.length) return c.impacts;
+  if (c.impact?.type) {
+    const t = c.impact.type;
+    if (t === "Hours saved / week") return ["Time / effort"];
+    const map: Record<string, string> = {
+      "Increased risk": "Risk / regulatory",
+      "Quality issue": "Quality",
+      "Regulatory issue": "Risk / regulatory",
+      Visibility: "Quality",
+      Insights: "Quality",
+    };
+    return [map[t] ?? t];
+  }
+  return [];
+}
+
 function cardLine(c: CaptureCard, labelFn: ThemeLabelFn): string {
   const body = (c.description ?? c.text).trim();
   const extras: string[] = [];
-  if (c.dataPoint && c.dataPoint !== "N/A") extras.push(`data: ${c.dataPoint}`);
-  if (c.impact?.type) {
-    const imp =
-      c.impact.type === "Hours saved / week" && c.impact.hours != null
-        ? `${c.impact.hours} hrs/wk saved`
-        : c.impact.type;
-    extras.push(`impact: ${imp}`);
-  }
+  const dps = dataPointsForCard(c);
+  if (dps.length) extras.push(`data sources: ${dps.join(" + ")}`);
+  const imps = impactsForCard(c);
+  if (imps.length) extras.push(`impact: ${imps.join(" + ")}`);
   const suffix = extras.length ? ` (${extras.join("; ")})` : "";
   return `[${labelFn(c.theme)}] ${body}${suffix}`;
 }
@@ -94,14 +118,44 @@ export function buildSuggestPrompt(
 }
 
 export function buildSingleSuggestPrompt(
-  cards: CaptureCard[],
+  challengeCards: CaptureCard[],
+  suggestedCards: CaptureCard[],
+  categoryName: string,
+  categorySuggestedCards: CaptureCard[],
   labelFn?: ThemeLabelFn
 ): PromptPayload {
-  const lines = formatCardLines(cards, labelFn);
+  const challengeLines = formatCardLines(challengeCards, labelFn);
+  const suggestedLines = formatCardLines(suggestedCards, labelFn);
+  const categoryLines = formatCardLines(categorySuggestedCards, labelFn);
+  const goal = categoryName.trim() || "Uncategorised";
+  const content = [
+    `CATEGORY GOAL: "${goal}"`,
+    "Suggest AI use cases that specifically serve the goal of this category. Interpret what the category name is asking for and return use cases that directly advance it.",
+    "",
+    "CAPTURED PAIN POINTS & CHALLENGES (categories, data sources, impacts):",
+    challengeLines || "(none captured yet)",
+    "",
+    "AI USE CASES ALREADY ON THE BOARD (any category) — do NOT repeat or closely paraphrase:",
+    suggestedLines || "(none yet)",
+    "",
+    `AI USE CASES ALREADY UNDER THIS CATEGORY ("${goal}") — do NOT repeat or closely paraphrase:`,
+    categoryLines || "(none yet)",
+  ].join("\n");
   return {
     system:
-      'Return ONLY JSON, no prose: {"text":"<concise AI/delivery use-case idea, <=12 words>"}. Base the idea on the captured pains on the board.',
-    content: lines || "No cards yet — suggest one generic delivery AI use case.",
+      "You help a live delivery workshop propose ONE new, practical AI use case. " +
+      `The facilitator's category goal is: "${goal}". ` +
+      "Suggest AI use cases that specifically serve the goal of this category — interpret what that category is asking for (built-in or custom, e.g. Reduce cost, Improve compliance, Accelerate delivery) and return use cases that directly advance it. " +
+      'Return ONLY JSON, no prose: {"text":"<concise task-level use case>","justification":"<one short line why this advances the category goal>"}. ' +
+      "TASK-LEVEL FRAMING (required): Name a concrete recurring task the team does and the artefact it produces — e.g. auto-draft the weekly PSR from project data; generate a first-draft business case from a short brief; draft and red-flag contract clauses against a standard; generate a stage-gate pack from templates; summarise meeting actions into a tracker. " +
+      "GOOD examples to emulate: automate weekly reporting, draft business cases, review/redline contracts, generate stage-gate packs, summarise meeting actions, populate templates, first-draft governance artefacts. " +
+      "BAD (avoid unless tied to a specific recurring task): predictive risk scoring, anomaly detection, real-time insight engine, vague capability statements. " +
+      "Rules: (1) Build on gaps in the captured pains — address what is missing. " +
+      "(2) Must be clearly distinct from every item already on the board and under this category. " +
+      "(3) Reference specific pains, data sources, or impacts where possible. " +
+      "(4) Propose something novel this session. " +
+      "(5) One idea only. text <= 18 words; justification <= 20 words.",
+    content,
   };
 }
 
@@ -113,9 +167,9 @@ export function buildClassifyPrompt(
   return {
     system:
       "You structure workshop capture cards. Return ONLY JSON, no prose: " +
-      '{"description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data points or N/A>","impact":{"type":"<one of the listed impact types>","hours":<number, only when type is Hours saved / week>},"theme":"<best-fit category id>"}. ' +
-      "Pick the closest existing option for dataPoint and impact.type; use N/A for dataPoint if none applies. " +
-      `Data points: ${[...dps, "N/A"].join(", ")}. ` +
+      '{"description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data sources or N/A>","impacts":["<zero or more from the listed impact types>"],"theme":"<best-fit category id>"}. ' +
+      "Pick the closest existing options. Use N/A for dataPoint if none applies. impacts may be an empty array. " +
+      `Data sources: ${[...dps, "N/A"].join(", ")}. ` +
       `Impact types: ${opts.impacts.join(", ")}. ` +
       `Category ids: ${opts.themeIds.join(", ")}.`,
     content: input.trim(),
