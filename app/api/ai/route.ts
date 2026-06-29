@@ -57,6 +57,10 @@ async function callGpt(system: string, content: string) {
         ],
       }),
     });
+    if (!r.ok) {
+      const body = await r.text();
+      return { text: "", error: `gpt ${r.status}: ${body}` };
+    }
     const d = await r.json();
     const text = (d.choices?.[0]?.message?.content || "").trim();
     return { text };
@@ -80,6 +84,10 @@ async function callGemini(system: string, content: string) {
         }),
       }
     );
+    if (!r.ok) {
+      const body = await r.text();
+      return { text: "", error: `gemini ${r.status}: ${body}` };
+    }
     const d = await r.json();
     const text = (d.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
     return { text };

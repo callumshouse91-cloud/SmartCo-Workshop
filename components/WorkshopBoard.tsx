@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import Link from "next/link";
-import { C, THEMES, themeOf, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider } from "./brand";
+import { C, THEMES, themeOf, themeLabel, SmartCoLogo, MUFGLogo, Corner, callAI, callAIResult, parseJSON, type AIProvider } from "./brand";
 import { DECK } from "./deck";
 
 const CARD_W = 216;
@@ -30,15 +30,181 @@ const SEED = [
 let nid = 100;
 const newId = () => `c${++nid}`;
 
+let lid = 0;
+const newLinkId = () => `l${++lid}`;
+
+const LINK_COLORS = [C.navy, C.blue, C.mint, C.coral, C.yellow] as const;
+
+type LinkData = {
+  id: string;
+  a: string;
+  b: string;
+  manual?: boolean;
+  reason?: string;
+  color?: string;
+  style?: "solid" | "dashed";
+};
+
+const normalizeLinks = (links: any[]): LinkData[] =>
+  links.map((l) => ({
+    ...l,
+    id: l.id || newLinkId(),
+    color: l.color || (l.manual ? C.navy : C.blue),
+    style: l.style === "dashed" ? "dashed" : "solid",
+  }));
+
+const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+const linkGeometry = (
+  pa: { x: number; y: number },
+  pb: { x: number; y: number },
+  slot: number,
+  total: number
+) => {
+  const mx = (pa.x + pb.x) / 2;
+  const my = (pa.y + pb.y) / 2;
+  const dx = pb.x - pa.x;
+  const dy = pb.y - pa.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const spread = total <= 1 ? 0 : (slot - (total - 1) / 2) * 32;
+  const ox = nx * spread;
+  const oy = ny * spread;
+  const pathD = `M ${pa.x} ${pa.y} C ${mx + ox} ${pa.y + oy}, ${mx + ox} ${pb.y + oy}, ${pb.x} ${pb.y}`;
+  return { pathD, midX: mx + ox, midY: my + oy };
+};
+
+const pairSlotMaps = (links: LinkData[]) => {
+  const counts: Record<string, number> = {};
+  const slots: Record<string, number> = {};
+  links.forEach((l) => {
+    const key = pairKey(l.a, l.b);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const nextSlot = (key: string) => {
+    const slot = slots[key] ?? 0;
+    slots[key] = slot + 1;
+    return { slot, total: counts[key] };
+  };
+  return { nextSlot };
+};
+
+function LinkStyleControls({
+  l, midX, midY, onUpdate, onRemove,
+}: {
+  l: LinkData;
+  midX: number;
+  midY: number;
+  onUpdate: (id: string, patch: Partial<LinkData>) => void;
+  onRemove: (id: string) => void;
+}) {
+  const w = 148;
+  const h = 52;
+  const x = midX - w / 2;
+  const y = midY - h / 2 - 14;
+  return (
+    <g data-link-ui transform={`translate(${x}, ${y})`} onPointerDown={(e) => e.stopPropagation()}>
+      <rect width={w} height={h} rx={6} fill={C.white} stroke={C.border} style={{ pointerEvents: "all" }} />
+      {LINK_COLORS.map((col, i) => (
+        <circle
+          key={col}
+          cx={10 + i * 18}
+          cy={14}
+          r={5}
+          fill={col}
+          stroke={l.color === col ? C.navy : C.border}
+          strokeWidth={l.color === col ? 2 : 1}
+          style={{ cursor: "pointer", pointerEvents: "all" }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onUpdate(l.id, { color: col }); }}
+        />
+      ))}
+      {(["solid", "dashed"] as const).map((style, i) => (
+        <g
+          key={style}
+          style={{ cursor: "pointer", pointerEvents: "all" }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onUpdate(l.id, { style }); }}
+        >
+          <rect x={6 + i * 44} y={28} width={40} height={16} rx={4} fill={l.style === style ? C.surface : C.white} stroke={l.style === style ? C.navy : C.border} />
+          <text x={26 + i * 44} y={39} fill={C.navy} fontSize={9} fontWeight={700} textAnchor="middle" style={{ pointerEvents: "none" }}>{style === "solid" ? "Solid" : "Dash"}</text>
+        </g>
+      ))}
+      <g
+        style={{ cursor: "pointer", pointerEvents: "all" }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onRemove(l.id); }}
+      >
+        <circle cx={w - 12} cy={12} r={8} fill={C.white} stroke={C.border} />
+        <text x={w - 12} y={15} fill={C.navy} fontSize={11} fontWeight={700} textAnchor="middle">×</text>
+      </g>
+    </g>
+  );
+}
+
+let boardSeq = 0;
+const newBoardId = () => `b${++boardSeq}`;
+
+type BoardData = {
+  id: string;
+  name: string;
+  cards: any[];
+  links: any[];
+  insight: string;
+  zoom?: number;
+  pan?: { x: number; y: number };
+};
+
+type SessionPayload = { boards: BoardData[]; activeId: string };
+
+const createBoard = (name: string, cards: any[] = [], links: any[] = [], insight = ""): BoardData => ({
+  id: newBoardId(),
+  name,
+  cards,
+  links,
+  insight,
+  zoom: 1,
+  pan: { x: 0, y: 0 },
+});
+
+const defaultSession = (): SessionPayload => {
+  const board = createBoard("Board 1", [...SEED], [], "");
+  return { boards: [board], activeId: board.id };
+};
+
+const normalizeSession = (v: any): SessionPayload => {
+  if (v?.boards?.length) {
+    const boards = v.boards.map((b: any, i: number) => ({
+      id: b.id || newBoardId(),
+      name: b.name || `Board ${i + 1}`,
+      cards: Array.isArray(b.cards) ? b.cards : [],
+      links: normalizeLinks(Array.isArray(b.links) ? b.links : []),
+      insight: typeof b.insight === "string" ? b.insight : "",
+      zoom: typeof b.zoom === "number" ? b.zoom : 1,
+      pan: b.pan && typeof b.pan.x === "number" ? b.pan : { x: 0, y: 0 },
+    }));
+    const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
+    return { boards, activeId };
+  }
+  if (v && (Array.isArray(v.cards) || Array.isArray(v.links) || typeof v.insight === "string")) {
+    const board = createBoard("Board 1", v.cards ?? [], normalizeLinks(v.links ?? []), v.insight ?? "");
+    return { boards: [board], activeId: board.id };
+  }
+  return defaultSession();
+};
+
+const boardSnapshot = (boards: BoardData[], activeId: string, zoom: number, pan: { x: number; y: number }) =>
+  boards.map((b) => (b.id === activeId ? { ...b, zoom, pan } : b));
+
 const cardW = (c: { w?: number }) => c.w ?? CARD_W;
 const cardH = (c: { h?: number }) => c.h ?? CARD_H;
-const cardAccent = (c: { color?: string; theme: string }) => c.color ?? themeOf(c.theme).color;
+const cardAccent = (c: { color?: string; theme?: string | null }) =>
+  c.color ?? (c.theme ? themeOf(c.theme)!.color : C.border);
 const FIT_MIN = 11;
 const FIT_MAX = 28;
 const EDIT_MIN_W = 320;
 const EDIT_MIN_H = 200;
-const DBL_CLICK_MS = 300;
-const DBL_CLICK_PX = 10;
 const sizeCapMax = (c: { size?: number }) => c.size ?? FIT_MAX;
 
 const cardDisplayW = (c: { w?: number }, editing: boolean) => (editing ? Math.max(cardW(c), EDIT_MIN_W) : cardW(c));
@@ -81,8 +247,8 @@ const findCardAtWorld = (cards: any[], wx: number, wy: number) =>
 function BoardCard({
   c, isEditing, isSelected, isDragging, isResizing, controlsOpen,
   editText, editRef,
-  onDown, onResizeDown, onConnectDown, onToggleControls, onStartEdit,
-  onEditChange, onFinishEdit, onCancelEdit, onCancelDrag,
+  onDown, onResizeDown, onConnectDown, onStartEdit,
+  onEditChange, onFinishEdit, onCancelEdit,
   updateCard, duplicateCard, removeCard,
 }: {
   c: any;
@@ -96,23 +262,21 @@ function BoardCard({
   onDown: (e: React.PointerEvent, id: string) => void;
   onResizeDown: (e: React.PointerEvent, id: string) => void;
   onConnectDown: (e: React.PointerEvent, id: string) => void;
-  onToggleControls: (id: string) => void;
   onStartEdit: (c: { id: string; text: string }) => void;
   onEditChange: (v: string) => void;
   onFinishEdit: (id: string, draft: string) => void;
   onCancelEdit: (id: string) => void;
-  onCancelDrag: () => void;
   updateCard: (id: string, patch: Record<string, unknown>) => void;
   duplicateCard: (id: string) => void;
   removeCard: (id: string) => void;
 }) {
   const t = themeOf(c.theme);
+  const uncategorised = !c.theme;
   const accent = cardAccent(c);
   const displayW = cardDisplayW(c, isEditing);
   const displayH = cardDisplayH(c, isEditing);
   const maxFs = sizeCapMax(c);
   const textRef = useRef<HTMLDivElement>(null);
-  const lastPtr = useRef({ t: -10000, x: 0, y: 0 });
   const [fitSize, setFitSize] = useState(maxFs);
 
   const remeasure = useCallback(() => {
@@ -133,26 +297,10 @@ function BoardCard({
     if (isEditing) return;
     const target = e.target as HTMLElement;
     if (target.closest("[data-card-action]") || target.closest("[data-handle]")) return;
-
-    const now = performance.now();
-    const dist = Math.hypot(e.clientX - lastPtr.current.x, e.clientY - lastPtr.current.y);
-    const isDbl = now - lastPtr.current.t < DBL_CLICK_MS && dist < DBL_CLICK_PX;
-    lastPtr.current = { t: now, x: e.clientX, y: e.clientY };
-
-    if (isDbl) {
-      onCancelDrag();
-      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* not captured yet */ }
-      if (target.closest("[data-card-header]") && !target.closest("button")) {
-        onToggleControls(c.id);
-      } else if (target.closest("[data-card-body]")) {
-        onStartEdit(c);
-      }
-      return;
-    }
-
     onDown(e, c.id);
   };
 
+  const actionBtn: React.CSSProperties = { border: "none", background: "transparent", color: "#9AA3B2", padding: 2, cursor: "pointer", display: "flex", alignItems: "center", lineHeight: 1 };
   const sizeTransition = isDragging || isResizing ? "none" : "width 0.32s cubic-bezier(.2,.8,.2,1), height 0.32s cubic-bezier(.2,.8,.2,1)";
 
   return (
@@ -163,17 +311,42 @@ function BoardCard({
     >
       <div
         className="card-pop"
-        style={{ position: "relative", width: displayW, height: displayH, transition: sizeTransition, background: C.white, border: `1px solid ${C.border}`, borderTop: `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: isEditing ? "text" : "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
+        style={{ position: "relative", width: displayW, height: displayH, transition: sizeTransition, background: C.white, border: `1px solid ${C.border}`, borderTop: uncategorised ? `2px solid ${C.border}` : `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: isEditing ? "text" : "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
         onPointerDown={handleCardPointerDown}
       >
         <div
           data-card-header
           style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexShrink: 0, cursor: "default" }}
         >
-          <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
+          {!uncategorised && t && (
+            <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
+          )}
           {c.ai && <span style={tag.ai}>AI</span>}
           <button className="card-dup" data-card-action style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.white, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 5, cursor: "pointer", lineHeight: 1.4 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => duplicateCard(c.id)} title="Duplicate">⧉</button>
-          <button style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
+          {isEditing ? (
+            <button
+              data-card-action
+              title="Done"
+              style={{ ...actionBtn, border: `1px solid ${C.border}`, background: C.surface, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 7px", borderRadius: 5 }}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => onFinishEdit(c.id, editText)}
+            >Done</button>
+          ) : (
+            <button
+              data-card-action
+              title="Edit"
+              style={actionBtn}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onStartEdit(c)}
+              aria-label="Edit card"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+            </button>
+          )}
+          <button data-card-action style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
         </div>
 
         {controlsOpen && (
@@ -185,7 +358,7 @@ function BoardCard({
                   title={p.label}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => updateCard(c.id, { color: p.color })}
-                  style={{ width: 14, height: 14, borderRadius: 3, padding: 0, cursor: "pointer", background: p.color, border: c.color === p.color || (!c.color && p.color === t.color) ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent" }}
+                  style={{ width: 14, height: 14, borderRadius: 3, padding: 0, cursor: "pointer", background: p.color, border: c.color === p.color || (!c.color && t && p.color === t.color) ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent" }}
                 />
               ))}
             </div>
@@ -258,16 +431,100 @@ export default function WorkshopBoard() {
   );
 }
 
+const INTRO_PROMPTS = [
+  "Where does delivery slow down?",
+  "Where's the manual effort sitting?",
+  "What breaks confidence in delivery?",
+];
+
+const INTRO_NETWORK_NODES: { x: number; y: number }[] = [
+  { x: 12, y: 18 }, { x: 28, y: 12 }, { x: 44, y: 22 }, { x: 58, y: 14 }, { x: 72, y: 26 },
+  { x: 18, y: 38 }, { x: 35, y: 42 }, { x: 52, y: 36 }, { x: 68, y: 44 }, { x: 82, y: 34 },
+  { x: 24, y: 58 }, { x: 48, y: 62 }, { x: 74, y: 56 },
+];
+
+const INTRO_NETWORK_EDGES: [number, number][] = [
+  [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [1, 6], [2, 7], [3, 8], [4, 9],
+  [5, 6], [6, 7], [7, 8], [8, 9], [5, 10], [6, 11], [7, 11], [8, 12], [9, 12], [10, 11], [11, 12],
+];
+
+function IntroAmbient() {
+  return (
+    <div className="intro-ambient" aria-hidden>
+      <svg className="intro-ambient-shape intro-ambient-shape--1" viewBox="0 0 100 70" preserveAspectRatio="none" aria-hidden>
+        <polygon points="18,4 88,4 72,66 2,66" fill={C.blue} />
+      </svg>
+      <svg className="intro-ambient-shape intro-ambient-shape--2" viewBox="0 0 100 70" preserveAspectRatio="none" aria-hidden>
+        <polygon points="12,6 82,6 94,64 24,64" fill={C.mint} />
+      </svg>
+      <svg className="intro-ambient-shape intro-ambient-shape--3" viewBox="0 0 100 70" preserveAspectRatio="none" aria-hidden>
+        <polygon points="8,8 78,2 92,62 22,68" fill={C.blue} />
+      </svg>
+      <svg className="intro-ambient-shape intro-ambient-shape--4" viewBox="0 0 100 70" preserveAspectRatio="none" aria-hidden>
+        <polygon points="14,2 84,10 76,68 6,60" fill={C.mint} />
+      </svg>
+      <svg className="intro-network" viewBox="0 0 100 70" preserveAspectRatio="xMidYMid slice" aria-hidden>
+        {INTRO_NETWORK_EDGES.map(([a, b], k) => {
+          const n1 = INTRO_NETWORK_NODES[a];
+          const n2 = INTRO_NETWORK_NODES[b];
+          return (
+            <line
+              key={k}
+              className="intro-network-line"
+              x1={n1.x}
+              y1={n1.y}
+              x2={n2.x}
+              y2={n2.y}
+              strokeDasharray="3 4"
+            />
+          );
+        })}
+        {INTRO_NETWORK_NODES.map((n, k) => (
+          <circle key={k} className="intro-network-dot" cx={n.x} cy={n.y} r="0.9" />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function IntroTitle({ title }: { title: string }) {
+  const parts = title.split(/(\s+|×)/).filter((p) => p.length > 0);
+  return (
+    <h1 className="intro-title">
+      {parts.map((part, k) => {
+        const isX = part.trim() === "×";
+        return (
+          <span
+            key={`${part}-${k}`}
+            className={`intro-title-part${isX ? " intro-title-x" : ""}`}
+            style={{ animationDelay: `${0.32 + k * 0.09}s` }}
+          >
+            {part}
+          </span>
+        );
+      })}
+    </h1>
+  );
+}
+
 function Intro({ onEnter }: { onEnter: () => void }) {
   const [i, setI] = useState(0);
   const last = i === DECK.length - 1;
   const s = DECK[i];
+  const isText = !s.image;
+  const isHero = isText && i === 0;
+
   return (
     <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", background: `linear-gradient(160deg, ${C.white} 0%, ${C.surface} 100%)`, padding: "28px 40px", overflow: "hidden" }}>
-      <Corner />
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2 }}>
-        <SmartCoLogo />
-        <MUFGLogo />
+      {isText ? <IntroAmbient /> : <Corner />}
+
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative" }}>
+        <div className={isText ? "intro-enter intro-logo-left" : undefined}>
+          <SmartCoLogo />
+        </div>
+        <div className={isText ? "intro-enter intro-logo-right" : undefined}>
+          <MUFGLogo />
+        </div>
       </header>
 
       {s.image ? (
@@ -275,14 +532,50 @@ function Intro({ onEnter }: { onEnter: () => void }) {
           <img src={s.image} alt={`Slide ${i + 1}`} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, boxShadow: "0 18px 50px rgba(10,22,40,.14)" }} />
         </div>
       ) : (
-        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", maxWidth: 760, zIndex: 2 }} className="enter-up">
-          <div style={{ textTransform: "uppercase", letterSpacing: 3, fontSize: 12, fontWeight: 700, color: C.blue, marginBottom: 14 }}>{s.eyebrow}</div>
-          <h1 style={{ fontFamily: display, fontSize: 56, lineHeight: 1.04, margin: 0, fontWeight: 800, letterSpacing: -1.5 }}>{s.title}</h1>
-          <p style={{ fontSize: 20, lineHeight: 1.5, color: "#3A4358", marginTop: 18, maxWidth: 620 }}>{s.body}</p>
+        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", maxWidth: 760, zIndex: 2, position: "relative" }}>
+          {s.eyebrow && (
+            <div className="intro-enter intro-eyebrow" style={{ textTransform: "uppercase", letterSpacing: 3, fontSize: 12, fontWeight: 700, color: C.blue, marginBottom: 14 }}>
+              {s.eyebrow}
+            </div>
+          )}
+          {s.title && <IntroTitle title={s.title} />}
+          {s.body && (
+            <p className="intro-enter intro-body" style={{ fontSize: 20, lineHeight: 1.5, color: C.body, marginTop: 18, maxWidth: 620 }}>
+              {s.body}
+            </p>
+          )}
+          {isHero && (
+            <>
+              <div className="intro-enter intro-ai-badge">
+                <span className="intro-live-dot" aria-hidden />
+                <span>Powered by live AI — Claude · Gemini · GPT</span>
+              </div>
+              <div className="intro-enter intro-prompts intro-prompt-rotate" aria-live="polite">
+                {INTRO_PROMPTS.map((prompt) => (
+                  <span key={prompt}>{prompt}</span>
+                ))}
+              </div>
+            </>
+          )}
           {s.chips && (
             <div style={{ display: "flex", gap: 12, marginTop: 26, flexWrap: "wrap" }}>
               {s.chips.map((c, k) => (
-                <span key={c.id} className="enter-up" style={{ display: "inline-flex", alignItems: "center", gap: 9, padding: "9px 16px", borderRadius: 999, border: `1.5px solid ${c.color}`, background: C.white, fontWeight: 600, fontSize: 14, animationDelay: `${0.15 + k * 0.1}s` }}>
+                <span
+                  key={c.id}
+                  className="intro-enter intro-chip"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 9,
+                    padding: "9px 16px",
+                    borderRadius: 999,
+                    border: `1.5px solid ${c.color}`,
+                    background: C.white,
+                    fontWeight: 600,
+                    fontSize: 14,
+                    animationDelay: `${0.58 + k * 0.12}s`,
+                  }}
+                >
                   <span style={{ width: 8, height: 8, borderRadius: 8, background: c.color }} /> {c.label}
                 </span>
               ))}
@@ -291,13 +584,21 @@ function Intro({ onEnter }: { onEnter: () => void }) {
         </div>
       )}
 
-      {last && (
-        <div style={{ position: "absolute", right: 40, bottom: 90, zIndex: 3 }}>
-          <button className="enter-up" style={btn.primary} onClick={onEnter}>{s.cta || "Enter workshop board"} →</button>
+      {last && s.cta && (
+        <div className={isText ? "intro-enter intro-cta-wrap" : undefined} style={{ position: "absolute", right: 40, bottom: 90, zIndex: 3 }}>
+          <button
+            className={isText ? "intro-cta" : "enter-up"}
+            style={btn.primary}
+            onClick={onEnter}
+          >
+            {s.cta}
+            {isText && <span className="intro-cta-arrow" aria-hidden>→</span>}
+            {!isText && " →"}
+          </button>
         </div>
       )}
 
-      <footer style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2 }}>
+      <footer style={{ display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2, position: "relative" }}>
         <button style={btn.ghost} onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
         <div style={{ display: "flex", gap: 8 }}>
           {DECK.map((_, k) => <span key={k} style={{ width: 8, height: 8, borderRadius: 8, background: k === i ? C.blue : C.border }} />)}
@@ -308,10 +609,139 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   );
 }
 
+function BoardTabBar({
+  boards, activeId, renamingId, renameDraft,
+  onSwitch, onAdd, onDelete, onStartRename, onRenameDraft, onFinishRename,
+}: {
+  boards: BoardData[];
+  activeId: string;
+  renamingId: string | null;
+  renameDraft: string;
+  onSwitch: (id: string) => void;
+  onAdd: () => void;
+  onDelete: (id: string) => void;
+  onStartRename: (id: string) => void;
+  onRenameDraft: (v: string) => void;
+  onFinishRename: (id: string, cancel?: boolean) => void;
+}) {
+  return (
+    <div
+      data-board-ui
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "6px 12px",
+        background: C.white,
+        borderBottom: `1px solid ${C.border}`,
+        overflowX: "auto",
+        flexShrink: 0,
+        minHeight: 36,
+      }}
+    >
+      {boards.map((b) => {
+        const active = b.id === activeId;
+        const renaming = renamingId === b.id;
+        return (
+          <div
+            key={b.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 2,
+              flexShrink: 0,
+              border: `1px solid ${active ? C.navy : C.border}`,
+              background: active ? C.surface : C.white,
+              borderRadius: 6,
+            }}
+          >
+            {renaming ? (
+              <input
+                value={renameDraft}
+                onChange={(e) => onRenameDraft(e.target.value)}
+                onBlur={() => onFinishRename(b.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onFinishRename(b.id);
+                  if (e.key === "Escape") onFinishRename(b.id, true);
+                }}
+                autoFocus
+                style={{ border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 12, padding: "4px 8px", width: 100, color: C.navy, margin: 2, outline: "none" }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => onSwitch(b.id)}
+                onDoubleClick={() => onStartRename(b.id)}
+                style={{ border: "none", background: "transparent", color: C.navy, fontSize: 12, fontWeight: active ? 700 : 600, padding: "5px 10px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+              >{b.name}</button>
+            )}
+            {!renaming && (
+              <button
+                type="button"
+                title="Rename board"
+                onClick={() => onStartRename(b.id)}
+                style={{ border: "none", background: "transparent", color: "#9AA3B2", padding: 2, cursor: "pointer", display: "flex" }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+              </button>
+            )}
+            {boards.length > 1 && !renaming && (
+              <button
+                type="button"
+                title="Delete board"
+                onClick={() => onDelete(b.id)}
+                style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 14, lineHeight: 1, cursor: "pointer", padding: "0 6px 0 2px" }}
+              >×</button>
+            )}
+          </div>
+        );
+      })}
+      <button type="button" onClick={onAdd} title="Add board" style={{ ...btn.ghost, padding: "4px 12px", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>+</button>
+    </div>
+  );
+}
+
 function Board({ onBack }: { onBack: () => void }) {
-  const [cards, setCards] = useState<any[]>(SEED);
-  const [links, setLinks] = useState<any[]>([]);
-  const [insight, setInsight] = useState("");
+  const initial = defaultSession();
+  const [boards, setBoards] = useState<BoardData[]>(initial.boards);
+  const [activeId, setActiveId] = useState(initial.activeId);
+  const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const renameOriginal = useRef("");
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+
+  const activeBoard = boards.find((b) => b.id === activeId) ?? boards[0];
+  const cards = activeBoard?.cards ?? [];
+  const links = activeBoard?.links ?? [];
+  const insight = activeBoard?.insight ?? "";
+
+  const setCards = useCallback((updater: React.SetStateAction<any[]>) => {
+    setBoards((bs) => bs.map((b) => {
+      if (b.id !== activeIdRef.current) return b;
+      const nextCards = typeof updater === "function" ? updater(b.cards) : updater;
+      return { ...b, cards: nextCards };
+    }));
+  }, []);
+
+  const setLinks = useCallback((updater: React.SetStateAction<any[]>) => {
+    setBoards((bs) => bs.map((b) => {
+      if (b.id !== activeIdRef.current) return b;
+      const nextLinks = typeof updater === "function" ? updater(b.links) : updater;
+      return { ...b, links: nextLinks };
+    }));
+  }, []);
+
+  const setInsight = useCallback((value: React.SetStateAction<string>) => {
+    setBoards((bs) => bs.map((b) => {
+      if (b.id !== activeIdRef.current) return b;
+      const nextInsight = typeof value === "function" ? value(b.insight) : value;
+      return { ...b, insight: nextInsight };
+    }));
+  }, []);
+
   const [text, setText] = useState("");
   const [theme, setTheme] = useState("accelerate");
   const [provider, setProvider] = useState<AIProvider>("claude");
@@ -323,7 +753,7 @@ function Board({ onBack }: { onBack: () => void }) {
   const [resize, setResize] = useState<{ id: string; startWx: number; startWy: number; startW: number; startH: number } | null>(null);
   const [connecting, setConnecting] = useState<{ fromId: string } | null>(null);
   const [connectCursor, setConnectCursor] = useState<{ x: number; y: number } | null>(null);
-  const [selectedLinkIdx, setSelectedLinkIdx] = useState<number | null>(null);
+  const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panDrag, setPanDrag] = useState<{ sx: number; sy: number; spx: number; spy: number } | null>(null);
@@ -365,10 +795,13 @@ function Board({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     (async () => {
-      const apply = (v: any) => {
-        if (v?.cards?.length) setCards(v.cards);
-        if (v?.links) setLinks(v.links);
-        if (typeof v?.insight === "string") setInsight(v.insight);
+      const apply = (raw: any) => {
+        const session = normalizeSession(raw);
+        setBoards(session.boards);
+        setActiveId(session.activeId);
+        const active = session.boards.find((b) => b.id === session.activeId) ?? session.boards[0];
+        setZoom(active?.zoom ?? 1);
+        setPan(active?.pan ?? { x: 0, y: 0 });
       };
       let restored = false;
       try {
@@ -388,7 +821,7 @@ function Board({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     if (!loaded.current) return;
-    const payload = { cards, links, insight };
+    const payload = { boards: boardSnapshot(boards, activeId, zoom, pan), activeId };
     try { localStorage.setItem(STORE_KEY, JSON.stringify(payload)); } catch {}
     const t = setTimeout(() => {
       fetch("/api/session", {
@@ -398,7 +831,7 @@ function Board({ onBack }: { onBack: () => void }) {
       }).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [cards, links, insight]);
+  }, [boards, activeId, zoom, pan]);
 
   useEffect(() => {
     if (!cards.length) return;
@@ -417,24 +850,24 @@ function Board({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (editingId) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && selectedLinkIdx !== null) {
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedLinkId) {
         e.preventDefault();
-        setLinks((l) => l.filter((_, i) => i !== selectedLinkIdx));
-        setSelectedLinkIdx(null);
+        setLinks((l) => l.filter((link) => link.id !== selectedLinkId));
+        setSelectedLinkId(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedLinkIdx, editingId]);
+  }, [selectedLinkId, editingId]);
 
   const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
     setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   }, []);
 
-  const addCard = useCallback((t: string, th: string, ai = false, pos?: { x: number; y: number }, openEdit = false) => {
+  const addCard = useCallback((t: string, th: string | null, ai = false, pos?: { x: number; y: number }, openEdit = false) => {
     const txt = (t || "").trim();
     if (!txt && !openEdit) return;
-    const reg = THEMES.findIndex((x) => x.id === th);
+    const reg = th == null ? THEMES.length : THEMES.findIndex((x) => x.id === th);
     const x = pos?.x ?? 90 + reg * 250 + Math.random() * 60;
     const y = pos?.y ?? 320 + Math.random() * 140;
     const id = newId();
@@ -475,6 +908,7 @@ function Board({ onBack }: { onBack: () => void }) {
     setEditText(c.text);
     setEditOriginal(c.text);
     setSelectedId(c.id);
+    setControlsCardId(null);
   };
 
   const duplicateCard = (id: string) => {
@@ -485,10 +919,77 @@ function Board({ onBack }: { onBack: () => void }) {
     setSelectedId(copy.id);
   };
 
-  const removeLink = (idx: number) => {
-    setLinks((l) => l.filter((_, i) => i !== idx));
-    setSelectedLinkIdx(null);
+  const removeLink = (id: string) => {
+    setLinks((l) => l.filter((link) => link.id !== id));
+    setSelectedLinkId(null);
   };
+
+  const updateLink = useCallback((id: string, patch: Partial<LinkData>) => {
+    setLinks((l) => l.map((link) => (link.id === id ? { ...link, ...patch } : link)));
+  }, [setLinks]);
+
+  const clearBoardUi = () => {
+    setEditingId(null);
+    setEditText("");
+    setSelectedId(null);
+    setSelectedLinkId(null);
+    setControlsCardId(null);
+    setConnecting(null);
+    setConnectCursor(null);
+    setDrag(null);
+    setResize(null);
+    setPanDrag(null);
+  };
+
+  const switchBoard = (id: string) => {
+    if (id === activeId) return;
+    setBoards((bs) => boardSnapshot(bs, activeId, zoom, pan));
+    setActiveId(id);
+  };
+
+  const addBoard = () => {
+    const board = createBoard(`Board ${boards.length + 1}`);
+    setBoards((bs) => [...boardSnapshot(bs, activeId, zoom, pan), board]);
+    setActiveId(board.id);
+  };
+
+  const deleteBoard = (id: string) => {
+    if (boards.length <= 1) return;
+    const board = boards.find((b) => b.id === id);
+    if (!board) return;
+    if (!window.confirm(`Delete "${board.name}"? This cannot be undone.`)) return;
+    const idx = boards.findIndex((b) => b.id === id);
+    const remaining = boardSnapshot(boards, activeId, zoom, pan).filter((b) => b.id !== id);
+    if (activeId === id) {
+      setActiveId(remaining[Math.min(idx, remaining.length - 1)]?.id ?? remaining[0].id);
+    }
+    setBoards(remaining);
+  };
+
+  const startRenameBoard = (id: string) => {
+    const board = boards.find((b) => b.id === id);
+    if (!board) return;
+    renameOriginal.current = board.name;
+    setRenamingBoardId(id);
+    setRenameDraft(board.name);
+  };
+
+  const finishRenameBoard = (id: string, cancel = false) => {
+    const name = (cancel ? renameOriginal.current : renameDraft.trim()) || renameOriginal.current;
+    setBoards((bs) => bs.map((b) => (b.id === id ? { ...b, name } : b)));
+    setRenamingBoardId(null);
+    setRenameDraft("");
+  };
+
+  useEffect(() => {
+    if (!loaded.current) return;
+    const board = boards.find((b) => b.id === activeId);
+    if (!board) return;
+    setZoom(board.zoom ?? 1);
+    setPan(board.pan ?? { x: 0, y: 0 });
+    clearBoardUi();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
 
   const toWorld = useCallback((clientX: number, clientY: number) => {
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -498,6 +999,16 @@ function Board({ onBack }: { onBack: () => void }) {
       y: (clientY - rect.top - panY) / z,
     };
   }, []);
+
+  const addBlankBox = useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) {
+      const { x: wx, y: wy } = toWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      addCard("", null, false, { x: Math.max(0, wx - CARD_W / 2), y: Math.max(0, wy - CARD_H / 2) }, true);
+    } else {
+      addCard("", null, false, undefined, true);
+    }
+  }, [addCard, toWorld]);
 
   const zoomAtPoint = useCallback((newZoom: number, mx: number, my: number) => {
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
@@ -523,12 +1034,6 @@ function Board({ onBack }: { onBack: () => void }) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoomAtPoint]);
 
-  const toggleControls = (id: string) => {
-    setControlsCardId((prev) => (prev === id ? null : id));
-  };
-
-  const cancelDrag = () => setDrag(null);
-
   const onCanvasDown = (e: React.PointerEvent) => {
     const t = e.target as HTMLElement;
     if (editingId) {
@@ -538,7 +1043,7 @@ function Board({ onBack }: { onBack: () => void }) {
     if (e.button !== 0 || connecting) return;
     if (t.closest("[data-board-ui]") || t.closest("[data-panel-ui]") || t.closest("[data-card]") || t.closest("[data-link-ui]")) return;
     setSelectedId(null);
-    setSelectedLinkIdx(null);
+    setSelectedLinkId(null);
     setControlsCardId(null);
     setPanDrag({ sx: e.clientX, sy: e.clientY, spx: zoomPanRef.current.panX, spy: zoomPanRef.current.panY });
     canvasRef.current?.setPointerCapture(e.pointerId);
@@ -579,7 +1084,7 @@ function Board({ onBack }: { onBack: () => void }) {
     e.stopPropagation();
     setConnecting({ fromId: id });
     setConnectCursor(toWorld(e.clientX, e.clientY));
-    setSelectedLinkIdx(null);
+    setSelectedLinkId(null);
     setSelectedId(id);
     canvasRef.current?.setPointerCapture(e.pointerId);
   };
@@ -612,14 +1117,10 @@ function Board({ onBack }: { onBack: () => void }) {
       const { x: wx, y: wy } = toWorld(e.clientX, e.clientY);
       const target = findCardAtWorld(cards, wx, wy);
       if (target && target.id !== connecting.fromId) {
-        setLinks((l) => {
-          const dup = l.some((link) =>
-            (link.a === connecting.fromId && link.b === target.id) ||
-            (link.a === target.id && link.b === connecting.fromId)
-          );
-          if (dup) return l;
-          return [...l, { a: connecting.fromId, b: target.id, manual: true }];
-        });
+        setLinks((l) => [
+          ...l,
+          { id: newLinkId(), a: connecting.fromId, b: target.id, manual: true, color: C.navy, style: "solid" as const },
+        ]);
       }
       setConnecting(null);
       setConnectCursor(null);
@@ -639,7 +1140,7 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const arrange = () => {
     setCards((c) => c.map((card) => {
-      const reg = THEMES.findIndex((t) => t.id === card.theme);
+      const reg = card.theme == null ? THEMES.length : THEMES.findIndex((t) => t.id === card.theme);
       const same = c.filter((k) => k.theme === card.theme);
       const row = same.indexOf(card);
       return { ...card, x: 70 + reg * 280, y: 80 + row * 122 };
@@ -648,7 +1149,7 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const reviewPrompt = () => {
     const sys = "You are a senior delivery/PMO consultant observing a live MUFG discovery workshop. Given captured pain points across three themes, return 3 sharp insights as plain-text lines, each starting with '— '. Cover: the strongest emerging pattern, the single biggest AI opportunity, and one gap worth probing. No preamble, no headings.";
-    const body = cards.map((c) => `[${themeOf(c.theme).label}] ${c.text}`).join("\n");
+    const body = cards.map((c) => `[${themeLabel(c.theme)}] ${c.text}`).join("\n");
     return { sys, body };
   };
 
@@ -684,12 +1185,19 @@ function Board({ onBack }: { onBack: () => void }) {
     if (busy.links || cards.length < 2) return;
     setBusy((b) => ({ ...b, links: true }));
     const sys = 'Return ONLY a JSON array, no prose. Identify pairs of related captured items. Each element: {"a": id, "b": id, "reason": "<=6 words"}. Use only the provided ids. Max 6 pairs.';
-    const list = cards.map((c) => ({ id: c.id, text: c.text, theme: c.theme }));
+    const list = cards.map((c) => ({ id: c.id, text: c.text, theme: c.theme ?? "uncategorised" }));
     const out = await callAI(sys, JSON.stringify(list), provider);
     const arr = parseJSON(out);
     if (Array.isArray(arr)) {
       const ids = new Set(cards.map((c) => c.id));
-      const aiLinks = arr.filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b);
+      const aiLinks = arr
+        .filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b)
+        .map((p: any) => ({
+          ...p,
+          id: newLinkId(),
+          color: C.blue,
+          style: "solid" as const,
+        }));
       setLinks((l) => [...l.filter((x) => x.manual), ...aiLinks]);
     }
     setBusy((b) => ({ ...b, links: false }));
@@ -699,7 +1207,7 @@ function Board({ onBack }: { onBack: () => void }) {
     if (busy.ideas) return;
     setBusy((b) => ({ ...b, ideas: true }));
     const sys = 'Return ONLY a JSON array of 3 objects, no prose. Each: {"theme": "accelerate"|"manual"|"quality", "text": "<concise AI/delivery use-case idea, <=12 words>"}. Base them on the captured pains.';
-    const body = cards.map((c) => `[${c.theme}] ${c.text}`).join("\n");
+    const body = cards.map((c) => `[${themeLabel(c.theme)}] ${c.text}`).join("\n");
     const out = await callAI(sys, body || "No cards yet — suggest generic delivery AI use cases.", provider);
     const arr = parseJSON(out);
     if (Array.isArray(arr)) arr.slice(0, 3).forEach((it: any, k: number) => {
@@ -716,6 +1224,7 @@ function Board({ onBack }: { onBack: () => void }) {
 
   const zoomBottom = collapsed.bottom ? 12 : 20;
   const zoomRight = collapsed.right ? PANEL_TAB + 8 : 16;
+  const linkSlots = pairSlotMaps(links as LinkData[]);
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.surface, position: "relative", overflow: "hidden" }}>
@@ -759,6 +1268,19 @@ function Board({ onBack }: { onBack: () => void }) {
         </header>
       </div>
 
+      <BoardTabBar
+        boards={boards}
+        activeId={activeId}
+        renamingId={renamingBoardId}
+        renameDraft={renameDraft}
+        onSwitch={switchBoard}
+        onAdd={addBoard}
+        onDelete={deleteBoard}
+        onStartRename={startRenameBoard}
+        onRenameDraft={setRenameDraft}
+        onFinishRename={finishRenameBoard}
+      />
+
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
         <div
           ref={canvasRef}
@@ -782,23 +1304,47 @@ function Board({ onBack }: { onBack: () => void }) {
             }}
           >
             <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible" }}>
-              {links.map((l, k) => {
-                const a = cards.find((c) => c.id === l.a), b = cards.find((c) => c.id === l.b);
+              {links.map((l) => {
+                const link = l as LinkData;
+                const a = cards.find((c) => c.id === link.a);
+                const b = cards.find((c) => c.id === link.b);
                 if (!a || !b) return null;
-                const pa = center(a), pb = center(b), mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
-                const manual = !!l.manual;
-                const pathD = `M ${pa.x} ${pa.y} C ${mx} ${pa.y}, ${mx} ${pb.y}, ${pb.x} ${pb.y}`;
-                const selected = selectedLinkIdx === k;
+                const pa = center(a);
+                const pb = center(b);
+                const { slot, total } = linkSlots.nextSlot(pairKey(link.a, link.b));
+                const { pathD, midX, midY } = linkGeometry(pa, pb, slot, total);
+                const manual = !!link.manual;
+                const strokeColor = link.color || (manual ? C.navy : C.blue);
+                const dashed = link.style === "dashed";
+                const selected = selectedLinkId === link.id;
                 return (
-                  <g key={k} style={{ pointerEvents: "auto" }} data-link-ui onPointerDown={(e) => { e.stopPropagation(); setSelectedLinkIdx(k); setSelectedId(null); }}>
+                  <g
+                    key={link.id}
+                    style={{ pointerEvents: "auto" }}
+                    data-link-ui
+                    onPointerDown={(e) => { e.stopPropagation(); setSelectedLinkId(link.id); setSelectedId(null); }}
+                  >
                     <path d={pathD} fill="none" stroke="transparent" strokeWidth="14" />
-                    <path className={manual ? undefined : "link-path"} d={pathD} fill="none" stroke={manual ? C.navy : C.blue} strokeWidth="2" strokeOpacity={manual ? 1 : 0.55} />
-                    {l.reason && !manual && <text x={mx} y={my - 6} fill={C.navy} fontSize="11" textAnchor="middle" pointerEvents="none">{l.reason}</text>}
+                    <path
+                      className={!manual && !dashed ? "link-path" : undefined}
+                      d={pathD}
+                      fill="none"
+                      stroke={strokeColor}
+                      strokeWidth="2"
+                      strokeOpacity={manual ? 1 : 0.55}
+                      strokeDasharray={dashed ? "6 4" : undefined}
+                    />
+                    {link.reason && !manual && (
+                      <text x={midX} y={midY - 6} fill={C.navy} fontSize="11" textAnchor="middle" pointerEvents="none">{link.reason}</text>
+                    )}
                     {selected && (
-                      <g data-link-ui style={{ cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeLink(k); }}>
-                        <circle cx={mx} cy={my} r="10" fill={C.white} stroke={C.border} strokeWidth="1" />
-                        <text x={mx} y={my + 4} fill={C.navy} fontSize="13" fontWeight="700" textAnchor="middle">×</text>
-                      </g>
+                      <LinkStyleControls
+                        l={link}
+                        midX={midX}
+                        midY={midY}
+                        onUpdate={updateLink}
+                        onRemove={removeLink}
+                      />
                     )}
                   </g>
                 );
@@ -827,12 +1373,10 @@ function Board({ onBack }: { onBack: () => void }) {
                 onDown={onDown}
                 onResizeDown={onResizeDown}
                 onConnectDown={onConnectDown}
-                onToggleControls={toggleControls}
                 onStartEdit={startEdit}
                 onEditChange={setEditText}
                 onFinishEdit={finishEdit}
                 onCancelEdit={cancelEdit}
-                onCancelDrag={cancelDrag}
                 updateCard={updateCard}
                 duplicateCard={duplicateCard}
                 removeCard={removeCard}
@@ -853,7 +1397,7 @@ function Board({ onBack }: { onBack: () => void }) {
               pointerEvents: collapsed.bottom ? "none" : "auto",
             }}
           >
-            <div style={{ position: "relative", left: "50%", transform: "translateX(-50%)", display: "flex", gap: 8, background: C.white, padding: 8, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: "0 10px 30px rgba(10,22,40,.12)", width: "min(720px, 92%)", marginBottom: 20 }}>
+            <div style={{ position: "relative", left: "50%", transform: "translateX(-50%)", display: "flex", gap: 8, background: C.white, padding: 8, borderRadius: 12, border: `1px solid ${C.border}`, boxShadow: "0 10px 30px rgba(10,22,40,.12)", width: "min(860px, 96%)", marginBottom: 20, flexWrap: "wrap" }}>
               <button
                 type="button"
                 data-panel-ui
@@ -864,8 +1408,9 @@ function Board({ onBack }: { onBack: () => void }) {
               <select value={theme} onChange={(e) => setTheme(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "0 8px", fontSize: 13, color: C.navy, background: C.white }}>
                 {THEMES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
               </select>
-              <input style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }} placeholder="Type a pain point or use case, then Enter" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+              <input style={{ flex: 1, minWidth: 160, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }} placeholder="Type a pain point or use case, then Enter" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
               <button style={btn.primarySm} onClick={submit}>Add</button>
+              <button style={btn.ghost} onClick={addBlankBox}>Add blank box</button>
             </div>
           </div>
 
@@ -925,7 +1470,7 @@ function Board({ onBack }: { onBack: () => void }) {
         )}
       </div>
 
-      {showPack && <Pack cards={cards} insight={insight} onClose={() => setShowPack(false)} />}
+      {showPack && <Pack boards={boards} activeId={activeId} onClose={() => setShowPack(false)} />}
       {showCompare && (
         <CompareModal
           results={compareResults}
@@ -977,9 +1522,44 @@ function CompareModal({ results, loading, onClose }: {
   );
 }
 
-function Pack({ cards, insight, onClose }: any) {
+function BoardTakeawayContent({ cards, insight }: { cards: any[]; insight: string }) {
+  return (
+    <>
+      {THEMES.map((t) => {
+        const items = cards.filter((c: any) => c.theme === t.id);
+        if (!items.length) return null;
+        return (
+          <div key={t.id} style={{ marginTop: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, color: C.navy }}><span style={{ width: 12, height: 12, borderRadius: 3, background: t.color }} /> {t.label}</div>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => <li key={c.id} style={{ color: C.navy, marginBottom: 4 }}>{c.text}{c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}</li>)}</ul>
+          </div>
+        );
+      })}
+      {(() => {
+        const items = cards.filter((c: any) => !c.theme);
+        if (!items.length) return null;
+        return (
+          <div key="uncategorised" style={{ marginTop: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, color: C.navy }}><span style={{ width: 12, height: 12, borderRadius: 3, background: C.border, border: `1px solid ${C.border}` }} /> Uncategorised</div>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => <li key={c.id} style={{ color: C.navy, marginBottom: 4 }}>{c.text}{c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}</li>)}</ul>
+          </div>
+        );
+      })()}
+      {insight && (
+        <div style={{ marginTop: 22, padding: 16, background: C.surface, borderRadius: 10 }}>
+          <div style={{ fontWeight: 700, color: C.navy, marginBottom: 6 }}>AI synthesis</div>
+          {insight.split("\n").filter(Boolean).map((l: string, k: number) => <p key={k} style={{ margin: "2px 0", color: C.navy, fontSize: 14 }}>{l}</p>)}
+        </div>
+      )}
+    </>
+  );
+}
+
+function Pack({ boards, activeId, onClose }: { boards: BoardData[]; activeId: string; onClose: () => void }) {
+  const [includeAll, setIncludeAll] = useState(false);
+  const boardsToShow = includeAll ? boards : boards.filter((b) => b.id === activeId);
   const exportJSON = () => {
-    const blob = new Blob([JSON.stringify({ cards, insight }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ boards, activeId }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = "mufg-workshop-session.json"; a.click();
   };
@@ -989,25 +1569,23 @@ function Pack({ cards, insight, onClose }: any) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><SmartCoLogo scale={0.9} /><MUFGLogo scale={0.9} /></div>
         <h2 style={{ fontFamily: display, color: C.navy, margin: "18px 0 4px", fontSize: 26 }}>Session takeaway</h2>
         <p style={{ color: "#7A8499", marginTop: 0 }}>AI &amp; Delivery Workshop — captured live</p>
-        {THEMES.map((t) => {
-          const items = cards.filter((c: any) => c.theme === t.id);
-          if (!items.length) return null;
-          return (
-            <div key={t.id} style={{ marginTop: 18 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, color: C.navy }}><span style={{ width: 12, height: 12, borderRadius: 3, background: t.color }} /> {t.label}</div>
-              <ul style={{ margin: "8px 0 0", paddingLeft: 22 }}>{items.map((c: any) => <li key={c.id} style={{ color: C.navy, marginBottom: 4 }}>{c.text}{c.ai && <span style={{ ...tag.ai, marginLeft: 6 }}>AI</span>}</li>)}</ul>
-            </div>
-          );
-        })}
-        {insight && (
-          <div style={{ marginTop: 22, padding: 16, background: C.surface, borderRadius: 10 }}>
-            <div style={{ fontWeight: 700, color: C.navy, marginBottom: 6 }}>AI synthesis</div>
-            {insight.split("\n").filter(Boolean).map((l: string, k: number) => <p key={k} style={{ margin: "2px 0", color: C.navy, fontSize: 14 }}>{l}</p>)}
+        {boardsToShow.map((board, i) => (
+          <div key={board.id} style={{ marginTop: i === 0 ? 18 : 28, paddingTop: i === 0 ? 0 : 20, borderTop: i === 0 ? "none" : `1px solid ${C.border}` }}>
+            {(includeAll || boards.length > 1) && (
+              <h3 style={{ fontFamily: display, color: C.navy, margin: "0 0 8px", fontSize: 18 }}>{board.name}</h3>
+            )}
+            <BoardTakeawayContent cards={board.cards} insight={board.insight} />
           </div>
-        )}
-        <div className="no-print" style={{ display: "flex", gap: 10, marginTop: 22 }}>
+        ))}
+        <div className="no-print" style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap", alignItems: "center" }}>
           <button style={btn.primarySm} onClick={() => window.print()}>Print / save as PDF</button>
           <button style={btn.ghost} onClick={exportJSON}>Export JSON</button>
+          {boards.length > 1 && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.navy, cursor: "pointer" }}>
+              <input type="checkbox" checked={includeAll} onChange={(e) => setIncludeAll(e.target.checked)} />
+              Include all boards
+            </label>
+          )}
           <button style={btn.ghost} onClick={onClose}>Close</button>
         </div>
       </div>

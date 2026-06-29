@@ -12,7 +12,10 @@ export const THEMES = [
   { id: "manual", label: "Reduce manual effort", color: C.mint },
   { id: "quality", label: "Quality & confidence", color: C.coral },
 ];
-export const themeOf = (id: string) => THEMES.find((t) => t.id === id) || THEMES[0];
+export const themeOf = (id: string | null | undefined) =>
+  id ? THEMES.find((t) => t.id === id) ?? THEMES[0] : null;
+export const themeLabel = (id: string | null | undefined) =>
+  themeOf(id)?.label ?? "Uncategorised";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
 

@@ -20,7 +20,224 @@ body {
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #0065fc; outline-offset: 2px; }
 button:disabled { opacity: .55; cursor: default; }
 
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+  .intro-enter, .intro-title-part { opacity: 1 !important; transform: none !important; }
+  .intro-prompt-rotate span { opacity: 0 !important; position: static !important; }
+  .intro-prompt-rotate span:first-child { opacity: 1 !important; }
+  .intro-ambient-shape { opacity: 0.06 !important; transform: none !important; }
+  .intro-network { opacity: 0.35 !important; }
+}
+
+/* —— Intro deck (text slides) —— */
+.intro-enter {
+  opacity: 0;
+  animation: intro-rise 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes intro-rise {
+  from { opacity: 0; transform: translateY(22px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.intro-logo-left { animation-delay: 0s; }
+.intro-logo-right { animation-delay: 0.12s; }
+.intro-eyebrow { animation-delay: 0.22s; }
+.intro-body { animation-delay: 0.52s; }
+.intro-ai-badge { animation-delay: 0.62s; }
+.intro-prompts { animation-delay: 0.72s; }
+.intro-chip { /* delay set inline per chip */ }
+.intro-cta-wrap { animation-delay: 0.85s; }
+
+.intro-title {
+  font-family: var(--font-outfit), system-ui, sans-serif;
+  font-size: clamp(40px, 5.5vw, 56px);
+  line-height: 1.04;
+  margin: 0;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  color: #0a1628;
+}
+.intro-title-part {
+  display: inline-block;
+  opacity: 0;
+  animation: intro-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.intro-title-x {
+  color: #0065fc;
+  font-weight: 800;
+  animation: intro-rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, intro-x-glow 4s ease-in-out 1.2s infinite;
+}
+@keyframes intro-x-glow {
+  0%, 100% { opacity: 1; transform: translateY(0) scale(1); }
+  50% { opacity: 0.85; transform: translateY(-2px) scale(1.08); }
+}
+
+.intro-ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1.5px solid #e0e4ec;
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0a1628;
+}
+.intro-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #43e6a2;
+  flex-shrink: 0;
+  animation: intro-live-pulse 2.4s ease-in-out infinite;
+}
+@keyframes intro-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(67, 230, 162, 0.45); }
+  50% { opacity: 0.75; transform: scale(0.92); box-shadow: 0 0 0 6px rgba(67, 230, 162, 0); }
+}
+
+.intro-prompt-rotate {
+  position: relative;
+  height: 1.5em;
+  margin-top: 14px;
+  font-size: 15px;
+  color: #4b5563;
+  font-style: italic;
+  max-width: 520px;
+}
+.intro-prompt-rotate span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  animation: intro-prompt-cycle 15s ease-in-out infinite;
+}
+.intro-prompt-rotate span:nth-child(2) { animation-delay: 5s; }
+.intro-prompt-rotate span:nth-child(3) { animation-delay: 10s; }
+@keyframes intro-prompt-cycle {
+  0%, 6% { opacity: 0; transform: translateY(8px); }
+  8%, 28% { opacity: 1; transform: translateY(0); }
+  33%, 100% { opacity: 0; transform: translateY(-6px); }
+}
+
+.intro-cta {
+  animation: intro-rise 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) forwards, intro-cta-glow 3.5s ease-in-out 1.1s infinite;
+}
+@keyframes intro-cta-glow {
+  0%, 100% { box-shadow: 0 10px 24px rgba(0, 101, 252, 0.28); transform: translateY(0) scale(1); }
+  50% { box-shadow: 0 14px 34px rgba(0, 101, 252, 0.38); transform: translateY(-1px) scale(1.015); }
+}
+.intro-cta-arrow {
+  display: inline-block;
+  margin-left: 2px;
+  animation: intro-arrow-nudge 2s ease-in-out 1.2s infinite;
+}
+@keyframes intro-arrow-nudge {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(6px); }
+}
+
+.intro-ambient {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.intro-ambient-shape {
+  position: absolute;
+  pointer-events: none;
+}
+.intro-ambient-shape--1 {
+  width: 480px;
+  height: 320px;
+  top: -8%;
+  right: -6%;
+  opacity: 0.08;
+  animation: intro-drift-1 52s ease-in-out infinite;
+}
+.intro-ambient-shape--2 {
+  width: 380px;
+  height: 260px;
+  bottom: 8%;
+  left: -8%;
+  opacity: 0.06;
+  animation: intro-drift-2 58s ease-in-out infinite;
+}
+.intro-ambient-shape--3 {
+  width: 300px;
+  height: 220px;
+  top: 38%;
+  right: 18%;
+  opacity: 0.05;
+  animation: intro-drift-3 44s ease-in-out infinite;
+}
+.intro-ambient-shape--4 {
+  width: 260px;
+  height: 200px;
+  bottom: 22%;
+  right: 32%;
+  opacity: 0.07;
+  animation: intro-drift-4 64s ease-in-out infinite;
+}
+@keyframes intro-drift-1 {
+  0%, 100% { transform: translate(0, 0) rotate(-8deg); }
+  50% { transform: translate(-28px, 22px) rotate(-4deg); }
+}
+@keyframes intro-drift-2 {
+  0%, 100% { transform: translate(0, 0) rotate(6deg); }
+  50% { transform: translate(24px, -18px) rotate(10deg); }
+}
+@keyframes intro-drift-3 {
+  0%, 100% { transform: translate(0, 0) rotate(12deg); }
+  50% { transform: translate(-18px, 14px) rotate(8deg); }
+}
+@keyframes intro-drift-4 {
+  0%, 100% { transform: translate(0, 0) rotate(-14deg); }
+  50% { transform: translate(16px, -12px) rotate(-10deg); }
+}
+
+.intro-network {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.45;
+  animation: intro-network-breathe 8s ease-in-out infinite;
+}
+@keyframes intro-network-breathe {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.55; }
+}
+.intro-network-line {
+  stroke: #0065fc;
+  stroke-width: 0.6;
+  opacity: 0.12;
+  animation: intro-line-pulse 6s ease-in-out infinite;
+}
+.intro-network-line:nth-child(odd) { animation-delay: -2s; }
+.intro-network-line:nth-child(3n) { animation-delay: -4s; }
+@keyframes intro-line-pulse {
+  0%, 100% { stroke-opacity: 0.08; stroke-dashoffset: 0; }
+  50% { stroke-opacity: 0.18; stroke-dashoffset: 8; }
+}
+.intro-network-dot {
+  fill: #0065fc;
+  opacity: 0.14;
+  animation: intro-dot-pulse 4s ease-in-out infinite;
+}
+.intro-network-dot:nth-child(2n) { animation-delay: -1.5s; fill: #43e6a2; }
+@keyframes intro-dot-pulse {
+  0%, 100% { opacity: 0.1; }
+  50% { opacity: 0.24; }
+}
+
 
 .board-card .card-dup { opacity: 0; pointer-events: none; transition: opacity .15s; }
 .board-card:hover .card-dup,
