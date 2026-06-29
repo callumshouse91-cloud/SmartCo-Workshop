@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+// verify against vendor docs before the workshop — override in Vercel env
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+// verify against vendor docs before the workshop — override in Vercel env
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.5";
+// verify against vendor docs before the workshop — override in Vercel env
 const OPENAI_SEARCH_MODEL = process.env.OPENAI_SEARCH_MODEL || process.env.OPENAI_MODEL || "gpt-5.5";
+// verify against vendor docs before the workshop — override in Vercel env
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 type Provider = "claude" | "gemini" | "gpt";
@@ -296,6 +300,17 @@ async function callGemini(system: string, content: string, search: boolean): Pro
 }
 
 export async function POST(req: Request) {
+  const expected = process.env.WORKSHOP_TOKEN;
+  if (expected) {
+    const token = req.headers.get("x-workshop-token") ?? "";
+    if (token !== expected) {
+      return NextResponse.json(
+        { text: "", grounded: false, sources: [], error: "unauthorized" },
+        { status: 401 }
+      );
+    }
+  }
+
   try {
     const { system, content, provider = "claude", search = false } = await req.json();
     const p = provider as Provider;

@@ -78,9 +78,12 @@ export async function callAIResult(
     ? setTimeout(() => controller.abort(), options.timeoutMs)
     : null;
   try {
+    const workshopToken = process.env.NEXT_PUBLIC_WORKSHOP_TOKEN;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (workshopToken) headers["x-workshop-token"] = workshopToken;
     const res = await fetch("/api/ai", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ system, content, provider, search: options?.search }),
       signal: controller.signal,
     });

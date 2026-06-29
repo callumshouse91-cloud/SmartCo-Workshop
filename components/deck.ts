@@ -356,7 +356,7 @@ export const DECK: DeckSlide[] = [
     title: "Your SmartCo Lead",
     name: "Callum Campbell",
     role: "Head of Client Engagement",
-    email: "callum.Campbell@smart-co.co.uk",
+    email: "callum.campbell@smart-co.co.uk",
   },
 
   {

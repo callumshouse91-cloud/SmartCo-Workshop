@@ -207,7 +207,7 @@ export function AIContainmentSlide({ eyebrow, title, sub }: { eyebrow: string; t
       <Eyebrow>{eyebrow}</Eyebrow>
       <SlideTitle>{title}</SlideTitle>
       <p className="intro-enter intro-slide-body" style={{ margin: "0 0 8px", fontSize: "clamp(13px, 1.4vw, 16px)", animationDelay: "0.3s" }}>{sub}</p>
-      <div className="intro-enter intro-diagram-host" style={{ animationDelay: "0.38s" }}>
+      <div className="intro-enter" style={{ animationDelay: "0.38s" }}>
         <AIContainment compact />
         <AIContainmentLegend />
       </div>

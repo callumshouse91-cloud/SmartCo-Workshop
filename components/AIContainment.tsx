@@ -115,7 +115,6 @@ export function AIContainment({ compact }: { compact?: boolean }) {
         <circle cx={cx} cy={cy} r={coreR} fill={C.white} stroke={C.coral} strokeWidth={2} />
         <text x={cx} y={cy - 6} textAnchor="middle" fill={C.navy} fontSize={13} fontWeight={800} fontFamily={display}>Your workshop</text>
         <text x={cx} y={cy + 12} textAnchor="middle" fill="#3A4358" fontSize={10} fontWeight={600}>your data stays in</text>
-        <text x={cx} y={cy - coreR - 8} textAnchor="middle" fill={C.mint} fontSize={12} aria-hidden>🔒</text>
 
         {/* Blocked outbound arrow */}
         <line
