@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { C } from "./brand";
-import { AIContainment, AIContainmentLegend } from "./AIContainment";
+import { AIContainment } from "./AIContainment";
 import type {
   AgendaRow,
   CapabilityCard,
@@ -79,7 +79,165 @@ function CountUp({ target, prefix = "£", suffix = "k" }: { target: number; pref
   return <span className="intro-count-up">{prefix}{val}{suffix}</span>;
 }
 
-const PHASE_COLORS = [C.blue, C.mint, C.coral];
+const PHASE_TIMELINE_COLORS = [C.blue, C.mint, C.coral];
+const PHASE_JOURNEY_HEX_COLORS = [C.mint, C.yellow, C.coral];
+
+const VB_W = 1600;
+const VB_H = 900;
+const RAIL_Y = 450;
+const RAIL_X1 = 80;
+const RAIL_X2 = 1520;
+const HEX_R = 56;
+const HEX_CX = [0.12, 0.46, 0.79].map((p) => p * VB_W);
+const HEX_DELAYS = [0.55, 1.6, 2.7];
+
+type CalloutSide = "above" | "below";
+
+type CalloutSlot = {
+  cxPct: number;
+  side: CalloutSide;
+  phase: number;
+  item: number;
+  delay: number;
+};
+
+const CALLOUT_SLOTS: CalloutSlot[] = [
+  { cxPct: 16, side: "above", phase: 0, item: 1, delay: 1.1 },
+  { cxPct: 48, side: "above", phase: 1, item: 0, delay: 1.95 },
+  { cxPct: 80, side: "above", phase: 2, item: 1, delay: 3.3 },
+  { cxPct: 7, side: "below", phase: 0, item: 0, delay: 0.85 },
+  { cxPct: 34, side: "below", phase: 1, item: 1, delay: 2.2 },
+  { cxPct: 60, side: "below", phase: 2, item: 0, delay: 3.05 },
+  { cxPct: 85, side: "below", phase: 2, item: 2, delay: 3.55 },
+];
+
+function hexPath(r: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 2;
+    pts.push(`${(r * Math.cos(a)).toFixed(1)},${(r * Math.sin(a)).toFixed(1)}`);
+  }
+  return `M ${pts.join(" L ")} Z`;
+}
+
+function parseCalloutItem(item: string) {
+  const dash = item.indexOf(" — ");
+  if (dash === -1) return { heading: item.trim(), body: "" };
+  return { heading: item.slice(0, dash).trim(), body: item.slice(dash + 3).trim() };
+}
+
+function leaderEndY(side: CalloutSide) {
+  return side === "above" ? 205 : 695;
+}
+
+export function PhaseJourneySlide({
+  eyebrow,
+  title,
+  phases,
+}: {
+  eyebrow?: string;
+  title: string;
+  phases: PhaseBlock[];
+}) {
+  const callouts = CALLOUT_SLOTS.map((slot) => {
+    const raw = phases[slot.phase]?.items[slot.item] ?? "";
+    const { heading, body } = parseCalloutItem(raw);
+    return { ...slot, heading, body };
+  });
+
+  return (
+    <div className="phase-journey-slide">
+      {eyebrow ? <Eyebrow>{eyebrow}</Eyebrow> : null}
+      <h2 className="phase-journey-title">{title}</h2>
+      <div className="phase-journey-stage" aria-hidden={false}>
+        <svg
+          className="phase-journey-svg"
+          viewBox={`0 0 ${VB_W} ${VB_H}`}
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label="Three-phase transformation journey with callouts on a horizontal rail"
+        >
+          {/* Grey rail */}
+          <rect
+            x={RAIL_X1}
+            y={RAIL_Y - 7}
+            width={RAIL_X2 - RAIL_X1}
+            height={14}
+            rx={7}
+            fill="#EEF0F4"
+            className="phase-journey-rail"
+          />
+
+          {/* Leader lines + rail dots (behind phase hexagons) */}
+          {callouts.map((c, i) => {
+            const x = (c.cxPct / 100) * VB_W;
+            const y2 = leaderEndY(c.side);
+            return (
+              <g key={`leader-${i}`}>
+                <line
+                  x1={x}
+                  y1={RAIL_Y}
+                  x2={x}
+                  y2={y2}
+                  stroke={C.blue}
+                  strokeWidth={1.5}
+                  pathLength={100}
+                  className="phase-journey-leader"
+                  style={{ animationDelay: `${c.delay}s` }}
+                />
+                <g transform={`translate(${x}, ${RAIL_Y})`}>
+                  <g className="phase-journey-dot" style={{ animationDelay: `${c.delay}s` }}>
+                    <path d={hexPath(7)} fill={C.blue} />
+                  </g>
+                </g>
+              </g>
+            );
+          })}
+
+          {/* Phase hexagons */}
+          {phases.slice(0, 3).map((phase, i) => (
+            <g key={phase.title} transform={`translate(${HEX_CX[i]}, ${RAIL_Y})`}>
+              <g className="phase-journey-hex" style={{ animationDelay: `${HEX_DELAYS[i]}s` }}>
+                <path
+                  d={hexPath(HEX_R)}
+                  fill={C.white}
+                  stroke={PHASE_JOURNEY_HEX_COLORS[i]}
+                  strokeWidth={5}
+                />
+                <text
+                  y={5}
+                  textAnchor="middle"
+                  fill={C.navy}
+                  fontSize={22}
+                  fontWeight={800}
+                  fontFamily={display}
+                >
+                  {phase.title}
+                </text>
+              </g>
+            </g>
+          ))}
+        </svg>
+
+        <div className="phase-journey-callouts">
+          {callouts.map((c, i) => (
+            <div
+              key={`callout-${i}`}
+              className={`phase-journey-callout phase-journey-callout--${c.side}`}
+              style={{
+                left: `${c.cxPct}%`,
+                animationDelay: `${c.delay}s`,
+              }}
+            >
+              <div className="phase-journey-callout-heading">{c.heading}</div>
+              {c.body ? <div className="phase-journey-callout-body">{c.body}</div> : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function PhaseTimelineSlide({
   eyebrow, title, phases,
@@ -97,7 +255,7 @@ export function PhaseTimelineSlide({
         <div className="intro-phase-timeline">
           {phases.map((p, i) => (
             <div key={p.title} className="intro-phase-node" style={{ animationDelay: `${0.2 + i * 0.15}s` }}>
-              <div className="intro-phase-dot" style={{ background: PHASE_COLORS[i] ?? C.blue }}>
+              <div className="intro-phase-dot" style={{ background: PHASE_TIMELINE_COLORS[i] ?? C.blue }}>
                 {i + 1}
               </div>
               <div className="intro-phase-label">{p.title}</div>
@@ -206,10 +364,9 @@ export function AIContainmentSlide({ eyebrow, title, sub }: { eyebrow: string; t
     <SlideFit>
       <Eyebrow>{eyebrow}</Eyebrow>
       <SlideTitle>{title}</SlideTitle>
-      <p className="intro-enter intro-slide-body" style={{ margin: "0 0 8px", fontSize: "clamp(13px, 1.4vw, 16px)", animationDelay: "0.3s" }}>{sub}</p>
-      <div className="intro-enter" style={{ animationDelay: "0.38s" }}>
+      <p className="intro-enter intro-slide-body ai-perimeter-copy" style={{ margin: "0 0 clamp(10px, 1.5vh, 16px)", animationDelay: "0.3s" }}>{sub}</p>
+      <div className="intro-enter ai-perimeter-stage" style={{ animationDelay: "0.38s" }}>
         <AIContainment compact />
-        <AIContainmentLegend />
       </div>
     </SlideFit>
   );
@@ -248,23 +405,7 @@ export function ContextSlide({
 }
 
 export function TransformationSlide({ title, phases }: { title: string; phases: PhaseBlock[] }) {
-  return (
-    <SlideFit dense>
-      <SlideTitle>{title}</SlideTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, alignItems: "start" }}>
-        {phases.map((phase, pi) => (
-          <div key={phase.title} {...stagger(pi, 0.18)}>
-            <div style={{ fontFamily: display, fontWeight: 800, fontSize: "clamp(12px, 1.3vw, 14px)", color: PHASE_COLORS[pi], marginBottom: 6 }}>{phase.title}</div>
-            {phase.items.map((item, ii) => (
-              <div key={ii} style={{ fontSize: "clamp(9px, 1vw, 11px)", color: body, lineHeight: 1.35, marginBottom: 6, paddingLeft: 8, borderLeft: `2px solid ${PHASE_COLORS[pi]}` }}>
-                {item}
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </SlideFit>
-  );
+  return <PhaseJourneySlide title={title} phases={phases} />;
 }
 
 export function EWhiteboardSlide({
@@ -412,6 +553,10 @@ export function CredentialsSlide({ title, cards, copyright }: { title: string; c
 
 export function renderDeckSlide(s: DeckSlide, onEnter: () => void, heroTitle?: React.ReactNode) {
   if (isImageSlide(s)) return null;
+  if ("kind" in s && (s as { kind: string }).kind === "phase-journey") {
+    const pj = s as unknown as { kind: "phase-journey"; eyebrow: string; title: string; phases: PhaseBlock[] };
+    return <PhaseJourneySlide eyebrow={pj.eyebrow} title={pj.title} phases={pj.phases} />;
+  }
   switch (s.kind) {
     case "hero":
       return <HeroSlide titleParts={heroTitle} />;

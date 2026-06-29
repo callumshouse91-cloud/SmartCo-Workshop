@@ -203,8 +203,8 @@ export const DECK: DeckSlide[] = [
   {
     kind: "ai-containment",
     eyebrow: "HOW OUR AI WORKS",
-    title: "Intelligence in. Your data stays in.",
-    sub: "Gemini and GPT bring market intelligence in. Claude is the wall around your workshop — prompt-driven, and your data stays behind it.",
+    title: "AI comes in. Your data never leaves.",
+    sub: "Gemini and GPT power the workspace — built in your environment, owned by you.",
   },
 
   {

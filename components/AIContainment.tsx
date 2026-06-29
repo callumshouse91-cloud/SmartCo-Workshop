@@ -3,190 +3,258 @@ import React from "react";
 import { C } from "./brand";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
+const body = "var(--font-dm-sans), system-ui, sans-serif";
 
-/** Animated on-brand diagram: web AI flows in, Claude wall contains, human prompts in, nothing leaves. */
-export function AIContainment({ compact }: { compact?: boolean }) {
-  const w = compact ? 640 : 800;
-  const h = compact ? 340 : 420;
-  const cx = w * 0.5;
-  const cy = h * 0.46;
-  const wallR = compact ? 95 : 118;
-  const coreR = compact ? 44 : 54;
+const LOGOS = {
+  claude: "/logos/Claude.jpg",
+  gemini: "/logos/Google-Gemini-Logo.png",
+  gpt: "/logos/ChatGPT-Logo.jpg",
+} as const;
 
-  const geminiX = w * 0.1;
-  const geminiY = h * 0.28;
-  const gptX = w * 0.1;
-  const gptY = h * 0.62;
-  const humanX = cx;
-  const humanY = h * 0.9;
+function pct(n: number, total: number) {
+  return `${(n / total) * 100}%`;
+}
 
-  const wallLeft = cx - wallR;
-  const wallRight = cx + wallR;
-  const geminiEnd = { x: wallLeft + 8, y: cy - 28 };
-  const gptEnd = { x: wallLeft + 8, y: cy + 28 };
-  const humanEnd = { x: cx, y: cy + wallR - 6 };
-  const blockedStart = { x: cx + coreR + 4, y: cy };
-  const blockedEnd = { x: wallRight - 10, y: cy };
-
+function PersonIcon({ x, y, size = 22 }: { x: number; y: number; size?: number }) {
+  const r = size * 0.22;
   return (
-    <div className="intro-diagram-host">
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        width="100%"
-        height="100%"
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label="AI containment diagram: Gemini and GPT bring intelligence in; Claude forms a sealed wall; your workshop data stays inside; nothing leaves"
-        className="ai-containment"
-        style={{ display: "block", overflow: "visible" }}
-      >
-        <defs>
-          <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <path d="M0,0 L8,4 L0,8 Z" fill={C.blue} />
-          </marker>
-          <marker id="arrow-mint" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <path d="M0,0 L8,4 L0,8 Z" fill={C.mint} />
-          </marker>
-          <marker id="arrow-navy" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <path d="M0,0 L8,4 L0,8 Z" fill={C.navy} />
-          </marker>
-          <marker id="arrow-coral" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-            <path d="M0,0 L8,4 L0,8 Z" fill={C.coral} />
-          </marker>
-        </defs>
+    <g transform={`translate(${x}, ${y})`} aria-hidden>
+      <circle cx={0} cy={-size * 0.28} r={r} fill={C.navy} />
+      <path
+        d={`M ${-size * 0.34} ${size * 0.08} Q 0 ${-size * 0.06} ${size * 0.34} ${size * 0.08} L ${size * 0.34} ${size * 0.42} L ${-size * 0.34} ${size * 0.42} Z`}
+        fill={C.navy}
+      />
+    </g>
+  );
+}
 
-        {/* Source label */}
-        <text x={geminiX} y={geminiY - 52} fill={C.navy} fontSize={11} fontWeight={600} fontFamily={display} opacity={0.75}>
-          web AI · brings info in
-        </text>
+function BadgeLock({ size = 11 }: { size?: number }) {
+  const s = size;
+  return (
+    <svg width={s} height={s} viewBox="0 0 12 12" aria-hidden style={{ flexShrink: 0 }}>
+      <rect x={3.2} y={5.2} width={5.6} height={4.4} rx={1.2} fill={C.white} />
+      <path
+        d="M 4.2 5.2 V 3.6 a 1.8 1.8 0 0 1 3.6 0 V 5.2"
+        fill="none"
+        stroke={C.white}
+        strokeWidth={1.4}
+      />
+    </svg>
+  );
+}
 
-        {/* Gemini node */}
-        <rect x={geminiX - 44} y={geminiY - 22} width={88} height={44} rx={10} fill={C.blue} className="containment-node" />
-        <text x={geminiX} y={geminiY + 5} textAnchor="middle" fill={C.white} fontSize={14} fontWeight={700} fontFamily={display}>Gemini</text>
-
-        {/* GPT node */}
-        <rect x={gptX - 36} y={gptY - 22} width={72} height={44} rx={10} fill={C.mint} className="containment-node" />
-        <text x={gptX} y={gptY + 5} textAnchor="middle" fill={C.navy} fontSize={14} fontWeight={700} fontFamily={display}>GPT</text>
-
-        {/* Inbound dotted lines */}
-        <path
-          id="path-gemini"
-          d={`M ${geminiX + 44} ${geminiY} L ${geminiEnd.x} ${geminiEnd.y}`}
-          fill="none"
-          stroke={C.blue}
-          strokeWidth={2.5}
-          strokeDasharray="6 5"
-          markerEnd="url(#arrow-blue)"
-          className="containment-dash-in containment-dash-blue"
-        />
-        <circle r={4} fill={C.blue} className="containment-travel containment-travel-gemini">
-          <animateMotion dur="2.4s" repeatCount="indefinite" path={`M ${geminiX + 44} ${geminiY} L ${geminiEnd.x} ${geminiEnd.y}`} />
-        </circle>
-
-        <path
-          id="path-gpt"
-          d={`M ${gptX + 36} ${gptY} L ${gptEnd.x} ${gptEnd.y}`}
-          fill="none"
-          stroke={C.mint}
-          strokeWidth={2.5}
-          strokeDasharray="6 5"
-          markerEnd="url(#arrow-mint)"
-          className="containment-dash-in containment-dash-mint"
-        />
-        <circle r={4} fill={C.mint} className="containment-travel">
-          <animateMotion dur="2.8s" repeatCount="indefinite" path={`M ${gptX + 36} ${gptY} L ${gptEnd.x} ${gptEnd.y}`} />
-        </circle>
-
-        {/* Claude wall — outer faint ring */}
-        <circle cx={cx} cy={cy} r={wallR + 10} fill="none" stroke={C.coral} strokeWidth={2} opacity={0.2} className="containment-wall-outer" />
-        {/* Main wall ring */}
-        <circle cx={cx} cy={cy} r={wallR} fill="none" stroke={C.coral} strokeWidth={14} className="containment-wall-pulse" />
-        {/* Padlock on ring (top-right) */}
-        <g transform={`translate(${cx + wallR * 0.55}, ${cy - wallR * 0.78})`}>
-          <rect x={-7} y={4} width={14} height={11} rx={2} fill={C.coral} />
-          <path d="M -5 4 V 1 a 5 5 0 0 1 10 0 v 3" fill="none" stroke={C.coral} strokeWidth={2.5} />
-        </g>
-
-        <text x={cx} y={cy - wallR - 18} textAnchor="middle" fill={C.navy} fontSize={15} fontWeight={800} fontFamily={display}>
-          Claude · the wall
-        </text>
-
-        {/* Core — white with coral border */}
-        <circle cx={cx} cy={cy} r={coreR} fill={C.white} stroke={C.coral} strokeWidth={2} />
-        <text x={cx} y={cy - 6} textAnchor="middle" fill={C.navy} fontSize={13} fontWeight={800} fontFamily={display}>Your workshop</text>
-        <text x={cx} y={cy + 12} textAnchor="middle" fill="#3A4358" fontSize={10} fontWeight={600}>your data stays in</text>
-
-        {/* Blocked outbound arrow */}
-        <line
-          x1={blockedStart.x}
-          y1={blockedStart.y}
-          x2={blockedEnd.x}
-          y2={blockedEnd.y}
-          stroke={C.coral}
-          strokeWidth={2}
-          strokeDasharray="4 3"
-          opacity={0.7}
-        />
-        <text x={(blockedStart.x + blockedEnd.x) / 2 + 6} y={blockedStart.y - 6} fill={C.coral} fontSize={16} fontWeight={800}>✕</text>
-
-        <text x={cx} y={cy + wallR + 28} textAnchor="middle" fill={C.coral} fontSize={12} fontWeight={700} fontFamily={display}>
-          nothing leaves the wall
-        </text>
-
-        {/* Human */}
-        <g transform={`translate(${humanX}, ${humanY})`}>
-          <circle cx={0} cy={-18} r={9} fill={C.navy} />
-          <path d="M -14 8 Q 0 -2 14 8 L 14 22 L -14 22 Z" fill={C.navy} />
-          <text x={0} y={38} textAnchor="middle" fill={C.navy} fontSize={11} fontWeight={600} fontFamily={display}>you · prompt-driven</text>
-        </g>
-
-        <line
-          x1={humanX}
-          y1={humanY - 28}
-          x2={humanEnd.x}
-          y2={humanEnd.y}
-          stroke={C.navy}
-          strokeWidth={2.5}
-          markerEnd="url(#arrow-navy)"
-          className="containment-human-line"
-        />
-        <circle r={4} fill={C.navy} className="containment-travel">
-          <animateMotion dur="2.2s" repeatCount="indefinite" path={`M ${humanX} ${humanY - 28} L ${humanEnd.x} ${humanEnd.y}`} />
-        </circle>
-      </svg>
+function ProviderChipHtml({
+  left,
+  top,
+  width,
+  height,
+  name,
+  logoSrc,
+  logoAlt,
+}: {
+  left: string;
+  top: string;
+  width: string;
+  height: string;
+  name: string;
+  logoSrc: string;
+  logoAlt: string;
+}) {
+  return (
+    <div
+      className="containment-provider-chip"
+      style={{ left, top, width, height }}
+    >
+      <div className="containment-logo-slot">
+        <img src={logoSrc} alt={logoAlt} />
+      </div>
+      <div className="containment-provider-copy">
+        <span className="containment-provider-name">{name}</span>
+        <span className="containment-provider-sub">web LLM</span>
+      </div>
     </div>
   );
 }
 
-export function AIContainmentLegend() {
-  const chips = [
-    { label: "Gemini", color: C.blue, text: C.white },
-    { label: "GPT", color: C.mint, text: C.navy },
-    { label: "Claude wall", color: C.coral, text: C.white },
-    { label: "You", color: C.navy, text: C.white },
-  ];
+/** Animated on-brand diagram: web LLMs feed in; Claude wall contains; your data never leaves. */
+export function AIContainment({ compact }: { compact?: boolean }) {
+  const w = compact ? 760 : 920;
+  const h = compact ? 300 : 380;
+  const cx = w * 0.66;
+  const cy = h * 0.52;
+  const wallR = compact ? 86 : 108;
+  const coreR = compact ? 40 : 50;
+  const outerR = wallR + 16;
+
+  const chipW = compact ? 132 : 148;
+  const chipH = compact ? 54 : 60;
+  const chipX = w * 0.02;
+  const geminiY = cy - 58;
+  const gptY = cy + 58;
+  const chipRight = chipX + chipW;
+
+  const geminiCore = { x: cx - coreR + 6, y: cy - 10 };
+  const gptCore = { x: cx - coreR + 6, y: cy + 10 };
+  const geminiPath = `M ${chipRight} ${geminiY} L ${geminiCore.x} ${geminiCore.y}`;
+  const gptPath = `M ${chipRight} ${gptY} L ${gptCore.x} ${gptCore.y}`;
+
+  const blockedStart = { x: cx + coreR - 2, y: cy };
+  const blockedEnd = { x: cx + wallR - 8, y: cy };
+  const badgeW = compact ? 178 : 196;
+  const badgeH = compact ? 28 : 30;
+  const badgeX = cx - badgeW / 2;
+  const badgeY = cy - wallR - badgeH - 6;
+
   return (
-    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginTop: 12 }}>
-      {chips.map((c, k) => (
-        <span
-          key={c.label}
-          className="intro-enter intro-chip"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "5px 12px",
-            borderRadius: 999,
-            background: c.color,
-            color: c.text,
-            fontSize: 11,
-            fontWeight: 700,
-            animationDelay: `${0.5 + k * 0.08}s`,
-          }}
+    <div className="intro-diagram-host ai-perimeter-diagram">
+      <div className="ai-containment-scene">
+        <svg
+          viewBox={`0 0 ${w} ${h}`}
+          width="100%"
+          height="100%"
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label="AI secure perimeter: Gemini and GPT feed web information in through the wall; your data stays inside and nothing leaves"
+          className="ai-containment-svg"
+          style={{ display: "block", overflow: "visible" }}
         >
-          {c.label}
-        </span>
-      ))}
+          <defs>
+            <marker id="arrow-blue-in" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill={C.blue} opacity={0.85} />
+            </marker>
+            <marker id="arrow-mint-in" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill={C.mint} opacity={0.9} />
+            </marker>
+          </defs>
+
+          <g transform={`translate(${cx}, ${cy})`}>
+            <g className="containment-wall-outer">
+              <circle
+                cx={0}
+                cy={0}
+                r={outerR}
+                fill="none"
+                stroke={C.coral}
+                strokeWidth={1.5}
+                strokeDasharray="5 7"
+                opacity={0.28}
+              />
+            </g>
+          </g>
+
+          <path
+            d={geminiPath}
+            fill="none"
+            stroke={C.blue}
+            strokeWidth={2.5}
+            strokeDasharray="7 6"
+            markerEnd="url(#arrow-blue-in)"
+            className="containment-dash-in containment-dash-blue"
+          />
+          <path
+            d={gptPath}
+            fill="none"
+            stroke={C.mint}
+            strokeWidth={2.5}
+            strokeDasharray="7 6"
+            markerEnd="url(#arrow-mint-in)"
+            className="containment-dash-in containment-dash-mint"
+            style={{ animationDelay: "0.4s" }}
+          />
+
+          <circle cx={cx} cy={cy} r={wallR} fill="none" stroke={C.coral} strokeWidth={compact ? 12 : 14} />
+
+          <g transform={`translate(${cx + wallR * 0.52}, ${cy - wallR * 0.72})`} aria-hidden>
+            <rect x={-6} y={3} width={12} height={10} rx={2} fill={C.coral} />
+            <path d="M -4 3 V 0.5 a 4 4 0 0 1 8 0 V 3" fill="none" stroke={C.coral} strokeWidth={2} />
+          </g>
+
+          <circle cx={cx} cy={cy} r={coreR} fill={C.white} stroke={C.coral} strokeWidth={2} />
+          <PersonIcon x={cx} y={cy - 14} size={compact ? 20 : 24} />
+          <text x={cx} y={cy + 14} textAnchor="middle" fill={C.navy} fontSize={compact ? 12 : 13} fontWeight={800} fontFamily={display}>
+            You
+          </text>
+          <text x={cx} y={cy + 28} textAnchor="middle" fill={C.body} fontSize={compact ? 9 : 10} fontWeight={600} fontFamily={body}>
+            your data stays here
+          </text>
+
+          <line
+            x1={blockedStart.x}
+            y1={blockedStart.y}
+            x2={blockedEnd.x}
+            y2={blockedEnd.y}
+            stroke={C.coral}
+            strokeWidth={2}
+            strokeDasharray="4 3"
+            opacity={0.75}
+          />
+          <g transform={`translate(${blockedEnd.x + 2}, ${blockedEnd.y})`} aria-hidden>
+            <circle r={9} fill={C.white} stroke={C.coral} strokeWidth={1.5} />
+            <line x1={-4} y1={-4} x2={4} y2={4} stroke={C.coral} strokeWidth={2} strokeLinecap="round" />
+            <line x1={4} y1={-4} x2={-4} y2={4} stroke={C.coral} strokeWidth={2} strokeLinecap="round" />
+          </g>
+          <text
+            x={blockedEnd.x + 18}
+            y={blockedEnd.y + 4}
+            fill={C.coral}
+            fontSize={compact ? 10 : 11}
+            fontWeight={700}
+            fontFamily={display}
+          >
+            nothing leaves
+          </text>
+
+          <text
+            x={chipRight + (cx - wallR - chipRight) * 0.42}
+            y={cy + 4}
+            textAnchor="middle"
+            fill={C.navy}
+            fontSize={compact ? 10 : 11}
+            fontWeight={600}
+            fontFamily={body}
+            opacity={0.72}
+          >
+            web info in
+          </text>
+        </svg>
+
+        <div className="ai-containment-html">
+          <div
+            className="containment-wall-badge"
+            style={{
+              left: pct(badgeX, w),
+              top: pct(badgeY, h),
+              width: pct(badgeW, w),
+              height: pct(badgeH, h),
+            }}
+          >
+            <div className="containment-badge-logo">
+              <img src={LOGOS.claude} alt="" />
+            </div>
+            <BadgeLock size={compact ? 10 : 11} />
+            <span className="containment-badge-label">Claude · the wall</span>
+          </div>
+
+          <ProviderChipHtml
+            left={pct(chipX, w)}
+            top={pct(geminiY - chipH / 2, h)}
+            width={pct(chipW, w)}
+            height={pct(chipH, h)}
+            name="Gemini"
+            logoSrc={LOGOS.gemini}
+            logoAlt="Gemini"
+          />
+          <ProviderChipHtml
+            left={pct(chipX, w)}
+            top={pct(gptY - chipH / 2, h)}
+            width={pct(chipW, w)}
+            height={pct(chipH, h)}
+            name="GPT"
+            logoSrc={LOGOS.gpt}
+            logoAlt="ChatGPT"
+          />
+        </div>
+      </div>
     </div>
   );
 }
