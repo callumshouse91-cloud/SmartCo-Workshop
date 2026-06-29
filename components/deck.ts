@@ -58,7 +58,8 @@ export type DeckSlide =
       phases: { title: string; label: string }[];
     }
   | {
-      kind: "transformation";
+      kind: "phase-journey";
+      eyebrow: string;
       title: string;
       phases: PhaseBlock[];
     }
@@ -236,7 +237,8 @@ export const DECK: DeckSlide[] = [
   },
 
   {
-    kind: "transformation",
+    kind: "phase-journey",
+    eyebrow: "AI ADOPTION & TRANSFORMATION APPROACH",
     title: "AI Adoption & Transformation Approach",
     phases: TRANSFORMATION_PHASES,
   },

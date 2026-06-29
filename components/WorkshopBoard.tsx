@@ -497,8 +497,10 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   const last = i === DECK.length - 1;
   const imageSlide = isImageSlide(s);
   const isText = !imageSlide;
+  const slideKind = isText && "kind" in s ? (s as { kind: string }).kind : null;
+  const isBlueSlide = slideKind === "hero" || slideKind === "credentials";
   const heroTitle = (
-    <h1 className="intro-title" style={{ margin: 0, fontSize: "clamp(28px, 4vw, 48px)" }}>
+    <h1 className="intro-title intro-slide-hero-title">
       {["SmartCo", " × ", "MUFG", " — AI & Delivery Workshop"].map((part, k) => {
         const isX = part.trim() === "×";
         return (
@@ -515,8 +517,8 @@ function Intro({ onEnter }: { onEnter: () => void }) {
   );
 
   return (
-    <div className="intro-deck">
-      {isText && (
+    <div className={`intro-deck${isBlueSlide ? " intro-deck--blue" : ""}`}>
+      {isText && !isBlueSlide && (
         <div className="intro-deck-ambient">
           <IntroAmbient />
         </div>
@@ -524,17 +526,19 @@ function Intro({ onEnter }: { onEnter: () => void }) {
 
       <header className="intro-deck-header">
         <div className={isText ? "intro-enter intro-logo-left" : undefined}>
-          <SmartCoLogo />
+          <SmartCoLogo scale={isBlueSlide ? 1 : 1} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            type="button"
-            className={isText ? "intro-enter" : undefined}
-            style={{ ...btn.ghost, padding: "7px 12px", fontSize: 12, animationDelay: "0.15s" }}
-            onClick={onEnter}
-          >
-            Enter workshop board
-          </button>
+          {!isBlueSlide && (
+            <button
+              type="button"
+              className={isText ? "intro-enter" : undefined}
+              style={{ ...btn.ghost, padding: "7px 12px", fontSize: 12, animationDelay: "0.15s" }}
+              onClick={onEnter}
+            >
+              Enter workshop board
+            </button>
+          )}
           <div className={isText ? "intro-enter intro-logo-right" : undefined}>
             <MUFGLogo />
           </div>
@@ -548,7 +552,7 @@ function Intro({ onEnter }: { onEnter: () => void }) {
             {!isText && <Corner />}
           </div>
         ) : (
-          <div key={i} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div key={i} className="intro-deck-slide-wrap">
             {renderDeckSlide(s, onEnter, heroTitle)}
           </div>
         )}
@@ -561,31 +565,31 @@ function Intro({ onEnter }: { onEnter: () => void }) {
       )}
 
       <footer className="intro-deck-footer">
-        <button type="button" style={btn.ghost} onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", maxWidth: "60%" }}>
-          {DECK.map((_, k) => (
-            <button
-              key={k}
-              type="button"
-              aria-label={`Go to slide ${k + 1}`}
-              onClick={() => setI(k)}
-              style={{
-                width: k === i ? 10 : 8,
-                height: k === i ? 10 : 8,
-                borderRadius: 8,
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-                background: k === i ? C.blue : C.border,
-              }}
-            />
-          ))}
-        </div>
-        {!last ? (
-          <button type="button" style={btn.ghost} onClick={() => setI((v) => Math.min(DECK.length - 1, v + 1))}>Next</button>
-        ) : (
-          <span style={{ width: 64 }} />
+        {!isBlueSlide && (
+          <div className="intro-deck-footer-brand" aria-hidden>
+            <SmartCoLogo scale={0.72} />
+          </div>
         )}
+        <div className="intro-deck-footer-nav">
+          <button type="button" className="intro-deck-nav-btn" onClick={() => setI((v) => Math.max(0, v - 1))} disabled={i === 0}>Back</button>
+          <div className="intro-deck-dots">
+            {DECK.map((_, k) => (
+              <button
+                key={k}
+                type="button"
+                aria-label={`Go to slide ${k + 1}`}
+                aria-current={k === i ? "step" : undefined}
+                onClick={() => setI(k)}
+                className={`intro-deck-dot${k === i ? " intro-deck-dot--active" : ""}`}
+              />
+            ))}
+          </div>
+          {!last ? (
+            <button type="button" className="intro-deck-nav-btn" onClick={() => setI((v) => Math.min(DECK.length - 1, v + 1))}>Next</button>
+          ) : (
+            <span className="intro-deck-nav-spacer" aria-hidden />
+          )}
+        </div>
       </footer>
     </div>
   );
