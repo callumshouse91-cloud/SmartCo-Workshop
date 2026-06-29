@@ -268,20 +268,20 @@ button:disabled { opacity: .55; cursor: default; }
   transition: transform 0.3s cubic-bezier(.2,.8,.2,1);
 }
 
-/* AI containment diagram */
-.containment-dash-in {
-  animation: containment-dash-flow 1.6s linear infinite;
-}
-.containment-wall-outer {
-  animation: containment-outer-spin 36s linear infinite;
-  transform-origin: center;
+/* AI containment diagram — single SVG */
+.containment-outer-ring {
   transform-box: fill-box;
+  transform-origin: center;
+  animation: containment-outer-spin 36s linear infinite;
 }
-@keyframes containment-dash-flow {
-  to { stroke-dashoffset: -26; }
+.containment-flow {
+  animation: containment-dash-flow 0.9s linear infinite;
 }
 @keyframes containment-outer-spin {
   to { transform: rotate(360deg); }
+}
+@keyframes containment-dash-flow {
+  to { stroke-dashoffset: -16; }
 }
 .ai-perimeter-copy {
   text-align: left;
@@ -312,136 +312,19 @@ button:disabled { opacity: .55; cursor: default; }
   width: 100%;
   overflow: hidden;
 }
-.ai-perimeter-diagram {
-  align-items: center;
-  justify-content: center;
-  max-height: min(42vh, 320px);
-  width: 100%;
-  margin: 0 auto;
-  overflow: hidden;
-}
-.ai-perimeter-diagram svg {
-  max-height: min(40vh, 300px);
-}
-.ai-containment-scene {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
-.ai-containment-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  overflow: hidden;
-}
-.intro-diagram-host.ai-perimeter-diagram .ai-containment-svg {
-  height: 100%;
-  max-height: none;
-}
-.ai-containment-html {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.containment-provider-chip {
-  position: absolute;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px 6px 8px;
-  box-sizing: border-box;
-  background: #fff;
-  border: 1.5px solid #e0e4ec;
-  border-radius: 10px;
-  width: max-content;
-  max-width: 148px;
-}
-.containment-logo-slot,
-.containment-badge-logo {
+.ai-containment-fixed {
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  box-sizing: border-box;
-}
-.containment-logo-slot {
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  background: #f4f6fb;
-}
-.containment-logo-slot img,
-.containment-badge-logo img {
   width: 100%;
-  height: 100%;
-  object-fit: contain;
-  padding: 3px;
-  box-sizing: border-box;
+  max-width: 760px;
+  margin: 0 auto;
+  overflow: visible;
+}
+.ai-containment-fixed svg.ai-containment-svg {
   display: block;
-}
-.containment-provider-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.containment-provider-name {
-  font-family: var(--font-outfit), system-ui, sans-serif;
-  font-size: clamp(11px, 1.2vw, 13px);
-  font-weight: 800;
-  color: #0a1628;
-  line-height: 1.15;
-}
-.containment-provider-sub {
-  font-family: var(--font-dm-sans), system-ui, sans-serif;
-  font-size: clamp(8px, 0.95vw, 9px);
-  font-weight: 600;
-  color: #4b5563;
-  line-height: 1.15;
-}
-.containment-wall-badge {
-  position: absolute;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 10px 0 6px;
-  box-sizing: border-box;
-  background: #e65c43;
-  border-radius: 999px;
-  justify-content: center;
-  width: max-content;
-  max-width: 200px;
-  height: 100%;
-}
-.containment-wall-badge-mount {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 100%;
-  height: 100%;
-}
-.containment-wall-badge--inline {
-  position: static;
   height: auto;
-  min-height: 100%;
-}
-.containment-badge-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.95);
-}
-.containment-badge-label {
-  font-family: var(--font-outfit), system-ui, sans-serif;
-  font-size: clamp(10px, 1.1vw, 12px);
-  font-weight: 800;
-  color: #fff;
-  white-space: nowrap;
-  line-height: 1;
+  max-height: min(48vh, 380px);
+  overflow: visible;
 }
 
 .intro-stagger { opacity: 0; animation: intro-rise 0.65s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
@@ -1585,8 +1468,8 @@ button:disabled { opacity: .55; cursor: default; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .containment-dash-in,
-  .containment-wall-outer { animation: none !important; }
+  .containment-outer-ring,
+  .containment-flow { animation: none !important; }
   .intro-enter,
   .intro-stagger,
   .intro-title-part { opacity: 1 !important; animation: none !important; transform: none !important; }
