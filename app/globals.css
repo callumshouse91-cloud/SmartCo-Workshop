@@ -814,41 +814,51 @@ button:disabled { opacity: .55; cursor: default; }
   position: relative;
   z-index: 1;
 }
+.intro-deck-slide-wrap:has(.whos-in-room-slide) {
+  overflow: visible;
+  align-items: flex-start;
+}
 .whos-in-room-slide.intro-slide-fit {
   justify-content: flex-start;
+  overflow: visible;
+  max-height: none;
+}
+.whos-in-room-slide .intro-slide-eyebrow {
+  margin-bottom: clamp(4px, 0.6vh, 8px);
 }
 .whos-in-room-slide .intro-slide-title {
-  margin-bottom: clamp(6px, 1vh, 12px);
+  margin-bottom: clamp(4px, 0.8vh, 10px);
 }
 .whos-in-room-slide .whos-room-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   align-items: stretch;
-  gap: clamp(12px, 2vw, 22px);
+  gap: clamp(10px, 1.5vw, 18px);
   position: relative;
   z-index: 1;
-  margin-top: clamp(6px, 1.2vh, 12px);
-  flex-shrink: 0;
+  margin-top: clamp(4px, 0.8vh, 8px);
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
 }
 .whos-room-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  height: 100%;
+  align-self: stretch;
   text-align: center;
   background: #ffffff;
   border: 1px solid #e0e4ec;
   border-radius: 12px;
-  padding: clamp(14px, 2vh, 20px) clamp(12px, 1.5vw, 16px);
-  overflow: visible;
+  padding: clamp(10px, 1.4vh, 16px) clamp(10px, 1.3vw, 14px);
 }
 .whos-room-photo {
-  width: clamp(88px, 11vw, 112px);
-  height: clamp(88px, 11vw, 112px);
+  width: clamp(72px, 8.5vw, 96px);
+  height: clamp(72px, 8.5vw, 96px);
   border-radius: 50%;
   object-fit: cover;
   object-position: center;
-  margin-bottom: clamp(10px, 1.2vh, 14px);
+  margin-bottom: clamp(6px, 0.8vh, 10px);
   flex-shrink: 0;
 }
 .whos-room-photo--fallback {
@@ -875,7 +885,7 @@ button:disabled { opacity: .55; cursor: default; }
   font-family: var(--font-dm-sans), system-ui, sans-serif;
   font-size: clamp(10px, 1.05vw, 12px);
   color: #5a6478;
-  margin: 0 0 10px;
+  margin: 0 0 6px;
   line-height: 1.3;
   flex-shrink: 0;
 }
@@ -885,23 +895,22 @@ button:disabled { opacity: .55; cursor: default; }
   font-weight: 700;
   font-size: clamp(9px, 1vw, 11px);
   color: #ffffff;
-  padding: 4px 10px;
+  padding: 3px 9px;
   border-radius: 999px;
-  margin-bottom: clamp(10px, 1.2vh, 14px);
+  margin-bottom: clamp(6px, 0.8vh, 10px);
   letter-spacing: 0.02em;
   line-height: 1.2;
   flex-shrink: 0;
 }
 .whos-room-bio {
   font-family: var(--font-dm-sans), system-ui, sans-serif;
-  font-size: clamp(10px, 1.15vw, 12px);
+  font-size: clamp(10px, 1.1vw, 12px);
   color: #3a4358;
-  line-height: 1.6;
+  line-height: 1.5;
   margin: 0;
   text-align: left;
   width: 100%;
-  flex-shrink: 0;
-  overflow: visible;
+  flex: 1 1 auto;
 }
 @media (max-width: 900px) {
   .whos-in-room-slide .whos-room-grid {
@@ -1274,6 +1283,14 @@ button:disabled { opacity: .55; cursor: default; }
   .intro-diagram-host svg { max-height: min(30vh, 220px); }
   .phase-journey-title { font-size: clamp(18px, 2.8vw, 32px); margin-bottom: 4px; }
   .intro-slide-title { font-size: clamp(22px, 3.2vw, 36px); }
+  .whos-in-room-slide .intro-slide-title { font-size: clamp(20px, 2.8vw, 30px); margin-bottom: 4px; }
+  .whos-in-room-slide .whos-room-photo {
+    width: clamp(64px, 7.5vw, 84px);
+    height: clamp(64px, 7.5vw, 84px);
+    margin-bottom: 6px;
+  }
+  .whos-in-room-slide .whos-room-grid { gap: 10px; margin-top: 4px; }
+  .whos-in-room-slide .whos-room-card { padding: 10px 10px; }
   .intro-slide-split { grid-template-columns: 1fr min(32%, 260px); }
   .context-challenge-text { font-size: clamp(9px, 1vw, 11px); }
   .intro-hex-body { font-size: clamp(8px, 0.9vw, 10px); }

@@ -208,7 +208,7 @@ export function WhosInTheRoomSlide({
   members: TeamMemberCard[];
 }) {
   return (
-    <SlideFit className="intro-slide-has-corner whos-in-room-slide">
+    <SlideFit dense className="intro-slide-has-corner whos-in-room-slide">
       <SlideCornerAccent />
       <Eyebrow>{eyebrow}</Eyebrow>
       <SlideTitle>{title}</SlideTitle>

@@ -695,6 +695,27 @@ function layoutCards(
   return placed;
 }
 
+function layoutCardsFreeform(cards: WorkshopCard[]): WorkshopCard[] {
+  if (!cards.length) return cards;
+
+  const CARD_ROW_H = 122;
+  const CARD_Y0 = 80;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(cards.length)));
+  const sorted = [...cards].sort((a, b) =>
+    cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" }),
+  );
+
+  return sorted.map((card, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    return {
+      ...card,
+      x: SECTION_X0 + col * SECTION_COL_W,
+      y: CARD_Y0 + row * CARD_ROW_H,
+    };
+  });
+}
+
 type CategoryGhost = {
   card: WorkshopCard;
   categoryId: string | null;
@@ -1538,6 +1559,58 @@ function cardsWorldBounds(cards: WorkshopCard[]): WorldBounds | null {
     maxY = Math.max(maxY, c.y + h);
   }
   return { minX, minY, maxX, maxY };
+}
+
+function mergeWorldBounds(a: WorldBounds, b: WorldBounds): WorldBounds {
+  return {
+    minX: Math.min(a.minX, b.minX),
+    minY: Math.min(a.minY, b.minY),
+    maxX: Math.max(a.maxX, b.maxX),
+    maxY: Math.max(a.maxY, b.maxY),
+  };
+}
+
+function fitWorldBounds(
+  cards: WorkshopCard[],
+  ghosts: { x: number; y: number; card: WorkshopCard }[] = [],
+): WorldBounds | null {
+  let bounds = cardsWorldBounds(cards);
+  for (const g of ghosts) {
+    const w = cardDisplayW(g.card, false);
+    const h = cardDisplayH(g.card, false);
+    const ghostBounds: WorldBounds = { minX: g.x, minY: g.y, maxX: g.x + w, maxY: g.y + h };
+    bounds = bounds ? mergeWorldBounds(bounds, ghostBounds) : ghostBounds;
+  }
+  return bounds;
+}
+
+function viewportFitFromBounds(
+  bounds: WorldBounds,
+  rect: DOMRect,
+  bottomInset: number,
+): { zoom: number; pan: { x: number; y: number } } {
+  const topInset = RECENTER_SCREEN_PAD;
+  const sideInset = RECENTER_SCREEN_PAD;
+  const viewW = Math.max(120, rect.width - sideInset * 2);
+  const viewH = Math.max(120, rect.height - topInset - bottomInset);
+  const visibleCenterX = sideInset + viewW / 2;
+  const visibleCenterY = topInset + viewH / 2;
+
+  const pad = RECENTER_WORLD_PAD;
+  const bboxW = Math.max(bounds.maxX - bounds.minX + pad * 2, CARD_W);
+  const bboxH = Math.max(bounds.maxY - bounds.minY + pad * 2, CARD_H);
+  const cx = (bounds.minX + bounds.maxX) / 2;
+  const cy = (bounds.minY + bounds.maxY) / 2;
+
+  const fitZoom = Math.min(viewW / bboxW, viewH / bboxH);
+  const nextZoom = Math.min(1, Math.max(MIN_ZOOM, fitZoom));
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: visibleCenterX - cx * nextZoom,
+      y: visibleCenterY - cy * nextZoom,
+    },
+  };
 }
 
 const RECENTER_WORLD_PAD = 48;
@@ -5139,40 +5212,40 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
   const recenterView = useCallback(() => {
+    const currentCards = cards as WorkshopCard[];
+    if (!currentCards.length) {
+      resetView();
+      return;
+    }
+
+    const laidOut = arrangeBy === "none"
+      ? layoutCardsFreeform(currentCards)
+      : layoutCards(currentCards, arrangeBy, themes);
+
+    setBoards((bs) => bs.map((b) => (
+      b.id === activeIdRef.current ? { ...b, cards: laidOut } : b
+    )));
+
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) {
       resetView();
       return;
     }
 
-    const bounds = cardsWorldBounds(cards as WorkshopCard[]);
+    const ghosts = arrangeBy === "category" && duplicateAcrossCategories
+      ? computeCategoryGhosts(laidOut, themes)
+      : [];
+    const bounds = fitWorldBounds(laidOut, ghosts);
     if (!bounds) {
       resetView();
       return;
     }
 
     const bottomInset = collapsed.bottom ? RECENTER_BOTTOM_INSET_COLLAPSED : RECENTER_BOTTOM_INSET_OPEN;
-    const topInset = RECENTER_SCREEN_PAD;
-    const sideInset = RECENTER_SCREEN_PAD;
-    const viewW = Math.max(120, rect.width - sideInset * 2);
-    const viewH = Math.max(120, rect.height - topInset - bottomInset);
-    const visibleCenterX = sideInset + viewW / 2;
-    const visibleCenterY = topInset + viewH / 2;
-
-    const pad = RECENTER_WORLD_PAD;
-    const bboxW = Math.max(bounds.maxX - bounds.minX + pad * 2, CARD_W);
-    const bboxH = Math.max(bounds.maxY - bounds.minY + pad * 2, CARD_H);
-    const cx = (bounds.minX + bounds.maxX) / 2;
-    const cy = (bounds.minY + bounds.maxY) / 2;
-
-    const fitZoom = Math.min(viewW / bboxW, viewH / bboxH);
-    const nextZoom = Math.min(1, Math.max(MIN_ZOOM, fitZoom));
+    const { zoom: nextZoom, pan: nextPan } = viewportFitFromBounds(bounds, rect, bottomInset);
     setZoom(nextZoom);
-    setPan({
-      x: visibleCenterX - cx * nextZoom,
-      y: visibleCenterY - cy * nextZoom,
-    });
-  }, [cards, collapsed.bottom]);
+    setPan(nextPan);
+  }, [arrangeBy, cards, themes, duplicateAcrossCategories, collapsed.bottom]);
 
   const reviewPrompt = () => buildReviewPrompt(cards, resolveThemeLabel);
 
@@ -5465,7 +5538,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                 type="button"
                 style={TOOLBAR_BTN}
                 onClick={recenterView}
-                aria-label="Recenter all cards in view"
+                aria-label="Arrange cards into columns and fit in view"
               >
                 Recenter
               </button>
