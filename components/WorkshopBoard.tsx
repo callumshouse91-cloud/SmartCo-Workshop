@@ -716,17 +716,26 @@ function layoutCardsFreeform(cards: WorkshopCard[]): WorkshopCard[] {
   });
 }
 
-type CategoryGhost = {
+function dataSourceValues(card: WorkshopCard): string[] {
+  const real = realDataPoints(card.dataPoints);
+  return real.length ? real : [NA_DATA_POINT];
+}
+
+function impactValues(card: WorkshopCard): string[] {
+  return card.impact.types.length ? card.impact.types : [UNSPECIFIED_IMPACT];
+}
+
+type ArrangeGhost = {
   card: WorkshopCard;
-  categoryId: string | null;
+  laneKey: string;
   x: number;
   y: number;
 };
 
-function computeCategoryGhosts(cards: WorkshopCard[], themes: Theme[]): CategoryGhost[] {
+function computeCategoryGhosts(cards: WorkshopCard[], themes: Theme[]): ArrangeGhost[] {
   const CARD_ROW_H = 122;
   const CARD_Y0 = 80;
-  const ghosts: CategoryGhost[] = [];
+  const ghosts: ArrangeGhost[] = [];
   const cols: { key: string | null; index: number }[] = themes.map((t, i) => ({ key: t.id, index: i }));
   cols.push({ key: null, index: themes.length });
 
@@ -745,13 +754,74 @@ function computeCategoryGhosts(cards: WorkshopCard[], themes: Theme[]): Category
       if (isPrimaryCol) return;
       ghosts.push({
         card,
-        categoryId: col.key,
+        laneKey: col.key ?? "uncategorised",
         x: SECTION_X0 + col.index * SECTION_COL_W,
         y: CARD_Y0 + row * CARD_ROW_H,
       });
     });
   }
   return ghosts;
+}
+
+function computeDataSourceGhosts(cards: WorkshopCard[]): ArrangeGhost[] {
+  const CARD_ROW_H = 122;
+  const CARD_Y0 = 80;
+  const lanes = buildDataSourceLanes(cards);
+  const ghosts: ArrangeGhost[] = [];
+
+  for (let col = 0; col < lanes.length; col++) {
+    const laneSource = lanes[col].source;
+    const inColumn = cards.filter((card) => dataSourceValues(card).includes(laneSource));
+    inColumn.sort((a, b) =>
+      cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" }),
+    );
+    inColumn.forEach((card, row) => {
+      if (primaryDataSource(card) === laneSource) return;
+      ghosts.push({
+        card,
+        laneKey: laneSource,
+        x: SECTION_X0 + col * SECTION_COL_W,
+        y: CARD_Y0 + row * CARD_ROW_H,
+      });
+    });
+  }
+  return ghosts;
+}
+
+function computeImpactGhosts(cards: WorkshopCard[]): ArrangeGhost[] {
+  const CARD_ROW_H = 122;
+  const CARD_Y0 = 80;
+  const lanes = buildImpactLanes(cards);
+  const ghosts: ArrangeGhost[] = [];
+
+  for (let col = 0; col < lanes.length; col++) {
+    const laneImpact = lanes[col].impact;
+    const inColumn = cards.filter((card) => impactValues(card).includes(laneImpact));
+    inColumn.sort((a, b) =>
+      cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" }),
+    );
+    inColumn.forEach((card, row) => {
+      if (primaryImpact(card) === laneImpact) return;
+      ghosts.push({
+        card,
+        laneKey: laneImpact,
+        x: SECTION_X0 + col * SECTION_COL_W,
+        y: CARD_Y0 + row * CARD_ROW_H,
+      });
+    });
+  }
+  return ghosts;
+}
+
+function computeArrangeGhosts(
+  arrangeBy: ArrangeByKey,
+  cards: WorkshopCard[],
+  themes: Theme[],
+): ArrangeGhost[] {
+  if (arrangeBy === "category") return computeCategoryGhosts(cards, themes);
+  if (arrangeBy === "dataPoint") return computeDataSourceGhosts(cards);
+  if (arrangeBy === "impact") return computeImpactGhosts(cards);
+  return [];
 }
 
 const LAYOUT_CARD_ROW_H = 122;
@@ -4338,9 +4408,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     () => (arrangeBy === "impact" ? buildImpactLanes(cards as WorkshopCard[]) : []),
     [arrangeBy, cards],
   );
-  const categoryGhosts = useMemo(
-    () => (arrangeBy === "category" && duplicateAcrossCategories
-      ? computeCategoryGhosts(cards as WorkshopCard[], themes)
+  const arrangeGhosts = useMemo(
+    () => (duplicateAcrossCategories && arrangeBy !== "none"
+      ? computeArrangeGhosts(arrangeBy, cards as WorkshopCard[], themes)
       : []),
     [arrangeBy, duplicateAcrossCategories, cards, themes],
   );
@@ -5232,8 +5302,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       return;
     }
 
-    const ghosts = arrangeBy === "category" && duplicateAcrossCategories
-      ? computeCategoryGhosts(laidOut, themes)
+    const ghosts = duplicateAcrossCategories && arrangeBy !== "none"
+      ? computeArrangeGhosts(arrangeBy, laidOut, themes)
       : [];
     const bounds = fitWorldBounds(laidOut, ghosts);
     if (!bounds) {
@@ -5556,7 +5626,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               >
                 {showLinkages ? "Linkages on" : "Linkages off"}
               </button>
-              {arrangeBy === "category" && (
+              {arrangeBy !== "none" && (
                 <label
                   style={{
                     ...TOOLBAR_BTN,
@@ -5759,9 +5829,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               })()}
             </svg>
 
-            {categoryGhosts.map((g) => (
+            {arrangeGhosts.map((g) => (
               <BoardCard
-                key={`ghost-${g.card.id}-${g.categoryId ?? "uncategorised"}`}
+                key={`ghost-${g.card.id}-${g.laneKey}`}
                 c={{ ...g.card, x: g.x, y: g.y }}
                 arrangeBy={arrangeBy}
                 ghost
