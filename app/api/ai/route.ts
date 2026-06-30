@@ -104,7 +104,28 @@ function geminiIsGrounded(d: Record<string, unknown>): boolean {
 }
 
 function ok(result: AIResult): AIResult {
-  return { text: result.text || "", grounded: !!result.grounded, sources: result.sources || [] };
+  const out: AIResult = { text: result.text || "", grounded: !!result.grounded, sources: result.sources || [] };
+  if (result.error) out.error = result.error;
+  return out;
+}
+
+function formatOpenAIError(status: number, bodyText: string, model: string): string {
+  console.error(`[ai] openai error (model=${model}):`, bodyText);
+  let message = "";
+  let code = "";
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: { message?: string; code?: string; type?: string } };
+    const err = parsed?.error;
+    if (err) {
+      message = (err.message || "").trim();
+      code = (err.code || err.type || "").trim();
+    }
+  } catch {
+    /* fall back to raw body */
+  }
+  if (!message) message = bodyText.trim().slice(0, 300) || "request failed";
+  const detail = code ? `${code} — ${message}` : message;
+  return `OpenAI ${status}: ${detail} (model=${model})`;
 }
 
 async function callClaude(system: string, content: string, search: boolean, temperature?: number): Promise<AIResult> {
@@ -167,7 +188,7 @@ async function gptChatCompletion(
     if (tokenField === "max_tokens" && /max_completion_tokens/i.test(errBody)) {
       return gptChatCompletion(messages, "max_completion_tokens", temperature);
     }
-    return { ok: false as const, error: `gpt ${r.status}: ${errBody}` };
+    return { ok: false as const, error: formatOpenAIError(r.status, errBody, OPENAI_MODEL) };
   }
   const d = await r.json();
   return { ok: true as const, text: (d.choices?.[0]?.message?.content || "").trim() };
@@ -202,7 +223,7 @@ async function fetchOpenAIResponses(system: string, content: string, toolChoice:
   });
   if (!r.ok) {
     const errBody = await r.text();
-    return { ok: false as const, error: `gpt responses ${r.status}: ${errBody}` };
+    return { ok: false as const, error: formatOpenAIError(r.status, errBody, OPENAI_SEARCH_MODEL) };
   }
   const d = await r.json();
   return { ok: true as const, data: d as Record<string, unknown> };

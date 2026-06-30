@@ -1499,8 +1499,13 @@ function aiErrorMessage(p: AIProvider, detail?: string): string {
 
 type SuggestCandidate = { text: string; justification?: string; error?: string; loading?: boolean };
 
+function truncateAiError(msg: string, max = 220): string {
+  const t = msg.trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+}
+
 function parseSuggestCandidate(raw: string, apiError?: string): SuggestCandidate {
-  if (apiError) return { text: "", error: "Couldn't generate" };
+  if (apiError) return { text: "", error: truncateAiError(apiError) };
   const obj = parseJSON(raw) as { text?: string; justification?: string } | null;
   if (obj && typeof obj.text === "string" && obj.text.trim()) {
     return {
@@ -4908,7 +4913,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         AI_PROVIDERS.map(async ({ id }) => {
           console.log(`[board-ai] compare → provider: ${id}`);
           const { text, error } = await callAIResult(system, content, id);
-          return { id, text: text || (error ? `— ${error}` : "— No response"), error };
+          return { id, text: text || "", error: error || undefined };
         })
       );
       const mapped = {} as Record<AIProvider, { text: string; error?: string; loading?: boolean }>;
@@ -5766,7 +5771,7 @@ function SuggestPickerModal({
                 {col?.loading ? (
                   <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>Loading…</p>
                 ) : col?.error ? (
-                  <p style={{ color: C.coral, fontSize: 13, margin: 0 }}>Couldn&apos;t generate — check API key</p>
+                  <p style={{ color: C.coral, fontSize: 12, margin: 0, lineHeight: 1.45, wordBreak: "break-word" }}>{col.error}</p>
                 ) : col?.text ? (
                   <>
                     <p style={{ fontSize: 14, lineHeight: 1.45, color: C.navy, margin: 0 }}>{col.text}</p>
@@ -5824,9 +5829,11 @@ function CompareModal({ results, loading, onClose }: {
                 <div style={{ fontWeight: 700, color: C.navy, marginBottom: 10, fontFamily: display }}>{label}</div>
                 {loading || col?.loading ? (
                   <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>Loading…</p>
+                ) : col?.error && !col.text ? (
+                  <p style={{ color: C.coral, fontSize: 12, margin: 0, lineHeight: 1.45, wordBreak: "break-word" }}>{col.error}</p>
                 ) : col?.text ? (
                   col.text.split("\n").filter(Boolean).map((line, k) => (
-                    <p key={k} style={{ fontSize: 13, lineHeight: 1.5, color: col.error && !col.text.startsWith("—") ? C.coral : C.navy, margin: "0 0 8px", paddingLeft: 8, borderLeft: `2px solid ${borderCol}` }}>{line}</p>
+                    <p key={k} style={{ fontSize: 13, lineHeight: 1.5, color: C.navy, margin: "0 0 8px", paddingLeft: 8, borderLeft: `2px solid ${borderCol}` }}>{line}</p>
                   ))
                 ) : (
                   <p style={{ color: "#7A8499", fontSize: 13, margin: 0 }}>No response</p>
