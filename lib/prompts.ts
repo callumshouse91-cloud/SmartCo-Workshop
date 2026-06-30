@@ -1,4 +1,4 @@
-import { themeLabel } from "@/components/brand";
+import { themeLabel, type AIProvider } from "@/components/brand";
 
 export type PromptPayload = { system: string; content: string };
 
@@ -9,9 +9,15 @@ export type CaptureCard = {
   description?: string;
   dataPoint?: string;
   dataPoints?: string[];
+  /** @deprecated legacy flat impacts array — migrated on load */
   impacts?: string[];
-  /** @deprecated legacy single impact */
-  impact?: { type: string; hours?: number } | null;
+  impact?: {
+    types?: string[];
+    hours?: number;
+    severity?: string;
+    /** @deprecated legacy single type */
+    type?: string;
+  } | null;
   classifying?: boolean;
 };
 
@@ -47,7 +53,8 @@ function dataPointsForCard(c: CaptureCard): string[] {
   return [];
 }
 
-function impactsForCard(c: CaptureCard): string[] {
+function impactTypesForCard(c: CaptureCard): string[] {
+  if (c.impact?.types?.length) return c.impact.types;
   if (c.impacts?.length) return c.impacts;
   if (c.impact?.type) {
     const t = c.impact.type;
@@ -64,13 +71,25 @@ function impactsForCard(c: CaptureCard): string[] {
   return [];
 }
 
+function impactExtrasForCard(c: CaptureCard): string[] {
+  const extras: string[] = [];
+  const types = impactTypesForCard(c);
+  if (types.length) extras.push(`impact types: ${types.join(" + ")}`);
+  if (c.impact?.severity) extras.push(`severity: ${c.impact.severity}`);
+  if (c.impact?.hours != null && c.impact.hours > 0) extras.push(`hours saved/week: ${c.impact.hours}`);
+  else if (c.impact?.type && (c.impact as { hours?: number }).hours) {
+    extras.push(`hours saved/week: ${(c.impact as { hours?: number }).hours}`);
+  }
+  return extras;
+}
+
 function cardLine(c: CaptureCard, labelFn: ThemeLabelFn): string {
   const body = (c.description ?? c.text).trim();
   const extras: string[] = [];
   const dps = dataPointsForCard(c);
   if (dps.length) extras.push(`data sources: ${dps.join(" + ")}`);
-  const imps = impactsForCard(c);
-  if (imps.length) extras.push(`impact: ${imps.join(" + ")}`);
+  const impactExtras = impactExtrasForCard(c);
+  if (impactExtras.length) extras.push(...impactExtras);
   const suffix = extras.length ? ` (${extras.join("; ")})` : "";
   return `[${labelFn(c.theme)}] ${body}${suffix}`;
 }
@@ -117,11 +136,22 @@ export function buildSuggestPrompt(
   };
 }
 
+
+const SUGGEST_PROVIDER_ANGLES: Record<AIProvider, string> = {
+  claude:
+    "YOUR ASSIGNED ANGLE (stick to this — do not overlap the other models' angles): REPORTING & STATUS — weekly/monthly reports, PSRs, portfolio roll-ups, dashboard packs, status updates to stakeholders.",
+  gpt:
+    "YOUR ASSIGNED ANGLE (stick to this — do not overlap the other models' angles): BUSINESS CASES & CONTRACTS — draft business cases from briefs, SOWs, contract review/redline against standards, procurement documentation.",
+  gemini:
+    "YOUR ASSIGNED ANGLE (stick to this — do not overlap the other models' angles): STAGE-GATE & GOVERNANCE — gate packs, governance artefact templates, approval submissions, planning packs, checklist population.",
+};
+
 export function buildSingleSuggestPrompt(
   challengeCards: CaptureCard[],
   suggestedCards: CaptureCard[],
   categoryName: string,
   categorySuggestedCards: CaptureCard[],
+  provider: AIProvider,
   labelFn?: ThemeLabelFn
 ): PromptPayload {
   const challengeLines = formatCardLines(challengeCards, labelFn);
@@ -141,19 +171,23 @@ export function buildSingleSuggestPrompt(
     `AI USE CASES ALREADY UNDER THIS CATEGORY ("${goal}") — do NOT repeat or closely paraphrase:`,
     categoryLines || "(none yet)",
   ].join("\n");
+  const angle = SUGGEST_PROVIDER_ANGLES[provider];
   return {
     system:
       "You help a live delivery workshop propose ONE new, practical AI use case. " +
       `The facilitator's category goal is: "${goal}". ` +
       "Suggest AI use cases that specifically serve the goal of this category — interpret what that category is asking for (built-in or custom, e.g. Reduce cost, Improve compliance, Accelerate delivery) and return use cases that directly advance it. " +
+      angle + " " +
       'Return ONLY JSON, no prose: {"text":"<concise task-level use case>","justification":"<one short line why this advances the category goal>"}. ' +
-      "TASK-LEVEL FRAMING (required): Name a concrete recurring task the team does and the artefact it produces — e.g. auto-draft the weekly PSR from project data; generate a first-draft business case from a short brief; draft and red-flag contract clauses against a standard; generate a stage-gate pack from templates; summarise meeting actions into a tracker. " +
-      "GOOD examples to emulate: automate weekly reporting, draft business cases, review/redline contracts, generate stage-gate packs, summarise meeting actions, populate templates, first-draft governance artefacts. " +
-      "BAD (avoid unless tied to a specific recurring task): predictive risk scoring, anomaly detection, real-time insight engine, vague capability statements. " +
-      "Rules: (1) Build on gaps in the captured pains — address what is missing. " +
+      "TASK-LEVEL FRAMING (required): Name a concrete recurring task the team does and the artefact it produces. " +
+      "Spread across delivery work: reporting, business cases, contracts/docs, stage-gate packs, planning — NOT three variants of the same task. " +
+      "GOOD: automate weekly reporting, draft business cases, review/redline contracts, generate stage-gate packs, populate templates, first-draft governance artefacts. " +
+      "AVOID as default: meeting/transcript summarisation, action-item extraction, 'summarise meetings' — only if pains explicitly centre on that and nothing better fits your assigned angle. " +
+      "BAD: predictive risk scoring, anomaly detection, real-time insight engine, vague capability statements. " +
+      "Rules: (1) Build on gaps in the captured pains. " +
       "(2) Must be clearly distinct from every item already on the board and under this category. " +
       "(3) Reference specific pains, data sources, or impacts where possible. " +
-      "(4) Propose something novel this session. " +
+      "(4) Propose a DISTINCT angle within your assignment — not the most obvious generic answer. " +
       "(5) One idea only. text <= 18 words; justification <= 20 words.",
     content,
   };
@@ -167,10 +201,13 @@ export function buildClassifyPrompt(
   return {
     system:
       "You structure workshop capture cards. Return ONLY JSON, no prose: " +
-      '{"description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data sources or N/A>","impacts":["<zero or more from the listed impact types>"],"theme":"<best-fit category id>"}. ' +
-      "Pick the closest existing options. Use N/A for dataPoint if none applies. impacts may be an empty array. " +
+      '{"description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data sources or N/A>","impact":{"types":["<one or more from the listed impact types>"],"hours":<number, only if Time / effort is selected>,"severity":"<one of Low, Medium, High, Critical>"},"theme":"<best-fit category id>"}. ' +
+      "Pick the closest existing options. Use N/A for dataPoint if none applies. " +
+      "For impact.types pick all that genuinely apply (usually 1–2). Estimate severity from the described pain. " +
+      "Include hours only when Time / effort is among types. types may be an empty array; omit severity if unclear. " +
       `Data sources: ${[...dps, "N/A"].join(", ")}. ` +
       `Impact types: ${opts.impacts.join(", ")}. ` +
+      `Severity options: Low, Medium, High, Critical. ` +
       `Category ids: ${opts.themeIds.join(", ")}.`,
     content: input.trim(),
   };

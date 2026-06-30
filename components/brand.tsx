@@ -73,7 +73,7 @@ export async function callAIResult(
   system: string,
   content: string,
   provider: AIProvider = "claude",
-  options?: { search?: boolean; timeoutMs?: number }
+  options?: { search?: boolean; timeoutMs?: number; temperature?: number }
 ): Promise<AIResult> {
   const controller = new AbortController();
   const timer = options?.timeoutMs
@@ -86,7 +86,13 @@ export async function callAIResult(
     const res = await fetch("/api/ai", {
       method: "POST",
       headers,
-      body: JSON.stringify({ system, content, provider, search: options?.search }),
+      body: JSON.stringify({
+        system,
+        content,
+        provider,
+        search: options?.search,
+        temperature: options?.temperature,
+      }),
       signal: controller.signal,
     });
     const data = await res.json();

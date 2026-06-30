@@ -168,6 +168,7 @@ type BoardData = {
   zoom?: number;
   pan?: { x: number; y: number };
   arrangeBy?: ArrangeByKey;
+  duplicateAcrossCategories?: boolean;
   showLinkages?: boolean;
 };
 
@@ -193,6 +194,15 @@ const DEFAULT_DATA_POINTS = [
 const DEFAULT_IMPACTS = [
   "Time / effort", "Cost", "Quality", "Risk / regulatory",
 ];
+const SEVERITY_OPTIONS = ["Low", "Medium", "High", "Critical"] as const;
+type ImpactSeverity = (typeof SEVERITY_OPTIONS)[number];
+const HOURS_IMPACT_TYPE = "Time / effort";
+const SEVERITY_COLORS: Record<ImpactSeverity, string> = {
+  Low: C.mint,
+  Medium: C.yellow,
+  High: C.coral,
+  Critical: "#8B1A1A",
+};
 const ADD_NEW_OPTION = "__add_new__";
 const UNSPECIFIED_IMPACT = "Unspecified";
 
@@ -209,13 +219,22 @@ const LEGACY_IMPACT_MAP: Record<string, string> = {
   "risk / regulatory": "Risk / regulatory",
 };
 
+type CardImpact = {
+  types: string[];
+  hours?: number;
+  severity?: ImpactSeverity;
+};
+
+const MAX_CATEGORIES = 5;
+
 type WorkshopCard = {
   id: string;
+  categories: string[];
   theme: string | null;
   text: string;
   description: string;
   dataPoints: string[];
-  impacts: string[];
+  impact: CardImpact;
   x: number;
   y: number;
   ai: boolean;
@@ -225,6 +244,32 @@ type WorkshopCard = {
   w?: number;
   h?: number;
 };
+
+function normalizeCategories(raw: any): string[] {
+  if (Array.isArray(raw?.categories)) {
+    const cleaned = raw.categories
+      .filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id: string) => id.trim());
+    return Array.from(new Set<string>(cleaned)).slice(0, MAX_CATEGORIES);
+  }
+  const legacy = raw?.theme;
+  if (typeof legacy === "string" && legacy.trim()) return [legacy.trim()];
+  return [];
+}
+
+function syncThemeFromCategories(categories: string[]): string | null {
+  return categories.length > 0 ? categories[0] : null;
+}
+
+function cardCategories(card: { categories?: string[]; theme?: string | null }): string[] {
+  if (card.categories?.length) return card.categories;
+  if (card.theme) return [card.theme];
+  return [];
+}
+
+function primaryCategory(card: { categories?: string[]; theme?: string | null }): string | null {
+  return cardCategories(card)[0] ?? null;
+}
 
 function mergeStringOptions(defaults: string[], saved?: string[], opts?: { appendNa?: boolean }): string[] {
   const out = [...defaults];
@@ -312,41 +357,97 @@ function mapLegacyImpact(value: string): string {
   return mapped ?? value.trim();
 }
 
-function normalizeImpacts(raw: unknown, legacyImpact?: { type?: string } | null): string[] {
+function normalizeSeverity(raw: unknown): ImpactSeverity | undefined {
+  const v = typeof raw === "string" ? raw.trim() : "";
+  if (v === "Low" || v === "Medium" || v === "High" || v === "Critical") return v;
+  return undefined;
+}
+
+function normalizeImpactTypes(raw: unknown, legacyType?: string | null): string[] {
   if (Array.isArray(raw)) {
     const cleaned = raw
       .filter((d): d is string => typeof d === "string" && d.trim().length > 0)
       .map((d) => mapLegacyImpact(d));
     return [...new Set(cleaned)];
   }
-  if (legacyImpact?.type?.trim()) {
-    return [mapLegacyImpact(legacyImpact.type)];
-  }
+  if (legacyType?.trim()) return [mapLegacyImpact(legacyType)];
   if (raw && typeof raw === "object" && "type" in (raw as object)) {
     const t = (raw as { type?: string }).type;
     if (t?.trim()) return [mapLegacyImpact(t)];
   }
-  if (typeof raw === "string" && raw.trim()) {
-    return [mapLegacyImpact(raw)];
-  }
+  if (typeof raw === "string" && raw.trim()) return [mapLegacyImpact(raw)];
   return [];
 }
 
-function toggleImpacts(current: string[], option: string): string[] {
+function normalizeImpact(raw: any): CardImpact {
+  const legacyObj = raw?.impact && typeof raw.impact === "object" && !Array.isArray(raw.impact)
+    ? raw.impact as { type?: string; types?: unknown; hours?: number; severity?: unknown }
+    : null;
+
+  if (legacyObj && Array.isArray(legacyObj.types)) {
+    const hours = typeof legacyObj.hours === "number" && legacyObj.hours > 0 ? legacyObj.hours : undefined;
+    return {
+      types: normalizeImpactTypes(legacyObj.types),
+      hours,
+      severity: normalizeSeverity(legacyObj.severity),
+    };
+  }
+
+  if (Array.isArray(raw?.impacts)) {
+    const hours = typeof legacyObj?.hours === "number" && legacyObj.hours > 0 ? legacyObj.hours : undefined;
+    return {
+      types: normalizeImpactTypes(raw.impacts),
+      hours,
+      severity: normalizeSeverity(legacyObj?.severity),
+    };
+  }
+
+  if (legacyObj?.type?.trim()) {
+    const hours = typeof legacyObj.hours === "number" && legacyObj.hours > 0 ? legacyObj.hours : undefined;
+    return {
+      types: normalizeImpactTypes(null, legacyObj.type),
+      hours,
+      severity: normalizeSeverity(legacyObj.severity),
+    };
+  }
+
+  return { types: [] };
+}
+
+function toggleImpactTypes(current: string[], option: string): string[] {
   if (current.includes(option)) return current.filter((d) => d !== option);
   return [...current, option];
 }
 
-function removeImpact(current: string[], option: string): string[] {
-  return current.filter((d) => d !== option);
-}
-
 function primaryImpact(card: WorkshopCard): string {
-  return card.impacts.length ? card.impacts[0] : UNSPECIFIED_IMPACT;
+  return card.impact.types.length ? card.impact.types[0] : UNSPECIFIED_IMPACT;
 }
 
-function secondaryImpacts(card: WorkshopCard): string[] {
-  return card.impacts.length > 1 ? card.impacts.slice(1) : [];
+function secondaryImpactTypes(card: WorkshopCard): string[] {
+  return card.impact.types.length > 1 ? card.impact.types.slice(1) : [];
+}
+
+function formatImpactFaceSummary(impact: CardImpact): string | null {
+  const { types, hours, severity } = impact;
+  if (!types.length && !severity) return null;
+  const parts: string[] = [];
+  if (severity) parts.push(severity);
+  if (types.length) {
+    const typeParts = types.map((t) => {
+      if (t === HOURS_IMPACT_TYPE && hours != null && hours > 0) return `${t} · ${hours} hrs/wk`;
+      return t;
+    });
+    parts.push(typeParts.join(" · "));
+  }
+  return parts.join(" · ");
+}
+
+function formatImpactTakeawaySummary(impact: CardImpact): string | null {
+  return formatImpactFaceSummary(impact);
+}
+
+function impactShowsHours(types: string[]): boolean {
+  return types.includes(HOURS_IMPACT_TYPE);
 }
 
 type ImpactLane = { impact: string; count: number };
@@ -364,11 +465,6 @@ function buildImpactLanes(cards: WorkshopCard[]): ImpactLane[] {
 
 function impactLaneIndex(lanes: ImpactLane[], impact: string): number {
   return lanes.findIndex((l) => l.impact === impact);
-}
-
-function formatImpactsSummary(impacts: string[]): string | null {
-  if (!impacts.length) return null;
-  return impacts.join(" + ");
 }
 
 function toggleDataPoints(current: string[], option: string): string[] {
@@ -394,18 +490,25 @@ function normalizeArrangeBy(raw: unknown): ArrangeByKey | undefined {
 function normalizeCard(raw: any): WorkshopCard {
   const text = typeof raw?.text === "string" ? raw.text : "";
   const description = typeof raw?.description === "string" ? raw.description : text;
+  const impact = normalizeImpact(raw);
+  const categories = normalizeCategories(raw);
+  const theme = syncThemeFromCategories(categories);
   return {
-    ...raw,
     id: raw.id || newId(),
-    theme: raw.theme ?? null,
+    categories,
+    theme,
     text,
     description: description || text,
     dataPoints: normalizeDataPoints(raw?.dataPoints ?? raw?.dataPoint),
-    impacts: normalizeImpacts(raw?.impacts, raw?.impact),
+    impact,
     x: typeof raw?.x === "number" ? raw.x : 0,
     y: typeof raw?.y === "number" ? raw.y : 0,
     ai: !!raw?.ai,
     classifying: false,
+    ...(raw?.color != null ? { color: raw.color } : {}),
+    ...(raw?.size != null ? { size: raw.size } : {}),
+    ...(raw?.w != null ? { w: raw.w } : {}),
+    ...(raw?.h != null ? { h: raw.h } : {}),
   };
 }
 
@@ -481,7 +584,7 @@ function layoutCards(
 
   const groups = new Map<number, WorkshopCard[]>();
   for (const card of cards) {
-    const col = columnIndex(card.theme, themes);
+    const col = columnIndex(primaryCategory(card), themes);
     if (!groups.has(col)) groups.set(col, []);
     groups.get(col)!.push(card);
   }
@@ -504,6 +607,44 @@ function layoutCards(
   return placed;
 }
 
+type CategoryGhost = {
+  card: WorkshopCard;
+  categoryId: string | null;
+  x: number;
+  y: number;
+};
+
+function computeCategoryGhosts(cards: WorkshopCard[], themes: Theme[]): CategoryGhost[] {
+  const CARD_ROW_H = 122;
+  const CARD_Y0 = 80;
+  const ghosts: CategoryGhost[] = [];
+  const cols: { key: string | null; index: number }[] = themes.map((t, i) => ({ key: t.id, index: i }));
+  cols.push({ key: null, index: themes.length });
+
+  for (const col of cols) {
+    const inColumn = cards.filter((card) => {
+      const cats = cardCategories(card);
+      if (col.key === null) return cats.length === 0;
+      return cats.includes(col.key);
+    });
+    inColumn.sort((a, b) =>
+      cardDescription(a).localeCompare(cardDescription(b), undefined, { sensitivity: "base" }),
+    );
+    inColumn.forEach((card, row) => {
+      const primary = primaryCategory(card);
+      const isPrimaryCol = col.key === null ? !primary : primary === col.key;
+      if (isPrimaryCol) return;
+      ghosts.push({
+        card,
+        categoryId: col.key,
+        x: SECTION_X0 + col.index * SECTION_COL_W,
+        y: CARD_Y0 + row * CARD_ROW_H,
+      });
+    });
+  }
+  return ghosts;
+}
+
 function matchOption(value: string | undefined, options: string[]): string | null {
   if (!value?.trim()) return null;
   const v = value.trim().toLowerCase();
@@ -523,15 +664,15 @@ async function fetchClassifyFields(
     impacts: opts.impacts,
     themeIds: opts.themes.map((t) => t.id),
   });
-  const fallback = { description: seed, dataPoints: [NA_DATA_POINT], impacts: [] };
+  const fallback = { description: seed, dataPoints: [NA_DATA_POINT], impact: { types: [] as string[] } };
   try {
     const { text, error } = await callAIResult(system, content, opts.provider);
     if (error) return { patch: fallback, error };
     const parsed = parseJSON(text) as {
       description?: string;
       dataPoint?: string;
+      impact?: { types?: string[]; hours?: number; severity?: string };
       impacts?: string[];
-      impact?: { type?: string };
       theme?: string;
     } | null;
     if (!parsed) return { patch: fallback, error: "could not parse response" };
@@ -540,16 +681,25 @@ async function fetchClassifyFields(
       description: typeof parsed.description === "string" && parsed.description.trim() ? parsed.description.trim() : seed,
       dataPoints: matchedDp ? [matchedDp] : [NA_DATA_POINT],
     };
-    const rawImpacts = Array.isArray(parsed.impacts)
-      ? parsed.impacts
-      : parsed.impact?.type
-        ? [parsed.impact.type]
+    const rawTypes = Array.isArray(parsed.impact?.types)
+      ? parsed.impact.types
+      : Array.isArray(parsed.impacts)
+        ? parsed.impacts
         : [];
-    const matchedImpacts = rawImpacts
+    const matchedTypes = rawTypes
       .map((v) => matchOption(typeof v === "string" ? v : undefined, opts.impacts))
       .filter((v): v is string => !!v);
-    patch.impacts = normalizeImpacts(matchedImpacts.length ? matchedImpacts : rawImpacts, parsed.impact);
+    const types = normalizeImpactTypes(matchedTypes.length ? matchedTypes : rawTypes);
+    const hours = types.includes(HOURS_IMPACT_TYPE) && typeof parsed.impact?.hours === "number" && parsed.impact.hours > 0
+      ? parsed.impact.hours
+      : undefined;
+    patch.impact = {
+      types,
+      hours,
+      severity: normalizeSeverity(parsed.impact?.severity),
+    };
     if (currentTheme == null && parsed.theme && opts.themes.some((t) => t.id === parsed.theme)) {
+      patch.categories = [parsed.theme];
       patch.theme = parsed.theme;
     }
     return { patch };
@@ -592,6 +742,250 @@ const fieldSelectStyle: React.CSSProperties = {
   width: "100%",
   boxSizing: "border-box",
 };
+
+function CategoryEditor({
+  categories,
+  themes,
+  onChange,
+  onCreateCategory,
+}: {
+  categories: string[];
+  themes: Theme[];
+  onChange: (next: string[]) => void;
+  onCreateCategory: (label: string) => string | null;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [capHint, setCapHint] = useState(false);
+
+  const toggle = (id: string) => {
+    if (categories.includes(id)) {
+      onChange(categories.filter((c) => c !== id));
+      return;
+    }
+    if (categories.length >= MAX_CATEGORIES) {
+      setCapHint(true);
+      window.setTimeout(() => setCapHint(false), 2200);
+      return;
+    }
+    onChange([...categories, id]);
+  };
+
+  const chipBase = (selected: boolean): React.CSSProperties => ({
+    border: `1.5px solid ${selected ? C.navy : C.border}`,
+    background: selected ? C.surface : C.white,
+    color: C.navy,
+    fontSize: 11,
+    fontWeight: selected ? 700 : 600,
+    padding: "5px 10px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    lineHeight: 1.3,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+        Categories {categories.length > 0 && <span style={{ fontWeight: 600, color: "#9AA3B2" }}>({categories.length}/{MAX_CATEGORIES})</span>}
+      </span>
+      {capHint && (
+        <span style={{ fontSize: 10, fontWeight: 600, color: C.coral }}>Maximum {MAX_CATEGORIES} categories</span>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {themes.map((t) => {
+          const order = categories.indexOf(t.id);
+          const selected = order >= 0;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              style={chipBase(selected)}
+              onClick={() => toggle(t.id)}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: t.color, flexShrink: 0 }} />
+              {t.label}
+              {selected && (
+                <span style={{
+                  minWidth: 16,
+                  height: 16,
+                  borderRadius: 8,
+                  background: C.navy,
+                  color: C.white,
+                  fontSize: 9,
+                  fontWeight: 800,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "0 4px",
+                }}>
+                  {order + 1}
+                </span>
+              )}
+            </button>
+          );
+        })}
+        {adding ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const label = draft.trim();
+                if (label) {
+                  const newId = onCreateCategory(label);
+                  if (newId && !categories.includes(newId) && categories.length < MAX_CATEGORIES) {
+                    onChange([...categories, newId]);
+                  }
+                }
+                setAdding(false);
+                setDraft("");
+              }
+              if (e.key === "Escape") { setAdding(false); setDraft(""); }
+            }}
+            onBlur={() => { setAdding(false); setDraft(""); }}
+            placeholder="New category"
+            style={{ ...fieldSelectStyle, fontSize: 11, width: 120, padding: "5px 8px" }}
+          />
+        ) : (
+          <button
+            type="button"
+            style={{ ...chipBase(false), color: C.blue, borderStyle: "dashed" }}
+            onClick={() => setAdding(true)}
+          >
+            + New category
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ImpactEditor({
+  impact,
+  impactOptions,
+  onChange,
+  onAddImpact,
+}: {
+  impact: CardImpact;
+  impactOptions: string[];
+  onChange: (next: CardImpact) => void;
+  onAddImpact: (label: string) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const extra = impact.types.filter((t) => !impactOptions.includes(t));
+  const options = [...impactOptions, ...extra];
+
+  const toggleType = (opt: string) => {
+    const types = toggleImpactTypes(impact.types, opt);
+    const next: CardImpact = { ...impact, types };
+    if (!impactShowsHours(types)) next.hours = undefined;
+    onChange(next);
+  };
+
+  const chipBase = (selected: boolean): React.CSSProperties => ({
+    border: `1.5px solid ${selected ? C.navy : C.border}`,
+    background: selected ? C.surface : C.white,
+    color: C.navy,
+    fontSize: 11,
+    fontWeight: selected ? 700 : 600,
+    padding: "5px 10px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    lineHeight: 1.3,
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#7A8499" }}>Impact</span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {options.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              style={chipBase(impact.types.includes(opt))}
+              onClick={() => toggleType(opt)}
+            >
+              {opt}
+            </button>
+          ))}
+          {adding ? (
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const t = draft.trim();
+                  if (t) {
+                    onAddImpact(t);
+                    onChange({ ...impact, types: toggleImpactTypes(impact.types, t) });
+                  }
+                  setAdding(false);
+                  setDraft("");
+                }
+                if (e.key === "Escape") { setAdding(false); setDraft(""); }
+              }}
+              onBlur={() => { setAdding(false); setDraft(""); }}
+              placeholder="New impact type"
+              style={{ ...fieldSelectStyle, fontSize: 11, width: 120, padding: "5px 8px" }}
+            />
+          ) : (
+            <button type="button" style={{ ...chipBase(false), color: C.blue, borderStyle: "dashed" }} onClick={() => setAdding(true)}>
+              + Add new…
+            </button>
+          )}
+        </div>
+      </div>
+      {impactShowsHours(impact.types) && (
+        <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+          Hours saved / week
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={impact.hours ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              const hours = v === "" ? undefined : Math.max(0, Number(v));
+              onChange({ ...impact, hours: hours != null && !Number.isNaN(hours) ? hours : undefined });
+            }}
+            style={{ ...fieldSelectStyle, fontSize: 12 }}
+          />
+        </label>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#7A8499" }}>Severity</span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {SEVERITY_OPTIONS.map((sev) => {
+            const selected = impact.severity === sev;
+            return (
+              <button
+                key={sev}
+                type="button"
+                style={{
+                  ...chipBase(selected),
+                  borderColor: selected ? SEVERITY_COLORS[sev] : C.border,
+                  background: selected ? `${SEVERITY_COLORS[sev]}22` : C.white,
+                }}
+                onClick={() => onChange({ ...impact, severity: selected ? undefined : sev })}
+              >
+                {sev}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const DEFAULT_THEME_IDS = new Set(THEMES.map((t) => t.id));
 
@@ -657,6 +1051,7 @@ const createBoard = (name: string, cards: any[] = [], links: any[] = [], insight
 });
 
 const DEFAULT_AI_PROVIDER: AIProvider = "claude";
+const SUGGEST_TEMPERATURE = 0.85;
 
 function isAiUseCasesBoardName(name: string): boolean {
   return /ai\s*use.?cases?/i.test(name) || /^board\s*2$/i.test(name);
@@ -698,6 +1093,7 @@ const normalizeSession = (v: any): SessionPayload => {
       zoom: typeof b.zoom === "number" ? b.zoom : 1,
       pan: b.pan && typeof b.pan.x === "number" ? b.pan : { x: 0, y: 0 },
       arrangeBy: normalizeArrangeBy(b.arrangeBy),
+      duplicateAcrossCategories: b.duplicateAcrossCategories === true ? true : undefined,
       showLinkages: b.showLinkages === false ? false : undefined,
     }));
     const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
@@ -1057,13 +1453,6 @@ const DATA_SOURCE_MULTI: MultiSelectBehavior = {
   emptyLabel: "N/A",
 };
 
-const PLAIN_MULTI: MultiSelectBehavior = {
-  normalize: (v) => normalizeImpacts(v),
-  toggle: toggleImpacts,
-  remove: removeImpact,
-  isEmptyDisplay: (v) => v.length === 0,
-  emptyLabel: "—",
-};
 
 function PortaledMultiSelect({
   label,
@@ -1349,7 +1738,8 @@ function CardComposerModal({
   dataPoints,
   impacts,
   onDraftChange,
-  onThemeChange,
+  onCategoriesChange,
+  onCreateCategory,
   onAddDataPoint,
   onAddImpact,
   onDone,
@@ -1362,7 +1752,8 @@ function CardComposerModal({
   dataPoints: string[];
   impacts: string[];
   onDraftChange: (patch: Partial<WorkshopCard>) => void;
-  onThemeChange: (themeId: string | null) => void;
+  onCategoriesChange: (categories: string[]) => void;
+  onCreateCategory: (label: string) => string | null;
   onAddDataPoint: (v: string) => void;
   onAddImpact: (v: string) => void;
   onDone: () => void;
@@ -1454,15 +1845,13 @@ function CardComposerModal({
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: classifying ? 0.6 : 1, transition: "opacity 0.2s" }}>
-            <PortaledSelect
-              label="Category"
-              value={draft.theme ?? ""}
-              options={themes.map((t) => ({ value: t.id, label: t.label }))}
-              optionColors={Object.fromEntries(themes.map((t) => [t.id, t.color]))}
-              onChange={(v) => onThemeChange(v || null)}
-              menuZIndex={COMPOSER_MENU_Z}
+            <CategoryEditor
+              categories={draft.categories}
+              themes={themes}
+              onChange={onCategoriesChange}
+              onCreateCategory={onCreateCategory}
             />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignItems: "start" }}>
               <PortaledMultiSelect
                 label="Data source"
                 value={draft.dataPoints}
@@ -1471,14 +1860,11 @@ function CardComposerModal({
                 onAddNew={onAddDataPoint}
                 menuZIndex={COMPOSER_MENU_Z}
               />
-              <PortaledMultiSelect
-                label="Impact"
-                value={draft.impacts}
-                options={impacts.map((d) => ({ value: d, label: d }))}
-                onChange={(v) => onDraftChange({ impacts: v })}
-                onAddNew={onAddImpact}
-                menuZIndex={COMPOSER_MENU_Z}
-                behavior={PLAIN_MULTI}
+              <ImpactEditor
+                impact={draft.impact}
+                impactOptions={impacts}
+                onChange={(impact) => onDraftChange({ impact })}
+                onAddImpact={onAddImpact}
               />
             </div>
           </div>
@@ -1507,7 +1893,7 @@ function CardComposerModal({
 }
 
 function BoardCard({
-  c, isSelected, isDragging, isResizing, controlsOpen, linkDrawMode, arrangeBy,
+  c, isSelected, isDragging, isResizing, controlsOpen, linkDrawMode, arrangeBy, ghost,
   onDown, onResizeDown, onConnectDown, onStartEdit,
   updateCard, duplicateCard, removeCard,
   themeOf, getCardAccent,
@@ -1519,6 +1905,7 @@ function BoardCard({
   controlsOpen: boolean;
   linkDrawMode: boolean;
   arrangeBy: ArrangeByKey;
+  ghost?: boolean;
   onDown: (e: React.PointerEvent, id: string) => void;
   onResizeDown: (e: React.PointerEvent, id: string) => void;
   onConnectDown: (e: React.PointerEvent, id: string) => void;
@@ -1529,8 +1916,9 @@ function BoardCard({
   themeOf: (id: string | null | undefined) => Theme | null;
   getCardAccent: (c: { color?: string; theme?: string | null }) => string;
 }) {
+  const categories = cardCategories(c);
   const t = themeOf(c.theme);
-  const uncategorised = !c.theme || !t;
+  const uncategorised = categories.length === 0;
   const accent = getCardAccent(c);
   const displayW = cardDisplayW(c, false);
   const displayH = cardDisplayH(c, false);
@@ -1540,8 +1928,16 @@ function BoardCard({
   const [fitSize, setFitSize] = useState(maxFs);
   const dataChipLabels = arrangeBy === "dataPoint" ? secondaryDataSources(c) : realDataPoints(c.dataPoints);
   const showDataChips = dataChipLabels.length > 0;
-  const impactChipLabels = arrangeBy === "impact" ? secondaryImpacts(c) : c.impacts;
-  const showImpactChips = impactChipLabels.length > 0;
+  const impactSummary = arrangeBy === "impact"
+    ? (() => {
+        const parts: string[] = [];
+        if (c.impact.severity) parts.push(c.impact.severity);
+        const sec = secondaryImpactTypes(c);
+        if (sec.length) parts.push(sec.join(" · "));
+        return parts.length ? parts.join(" · ") : null;
+      })()
+    : formatImpactFaceSummary(c.impact);
+  const showImpactChip = !!impactSummary;
 
   const remeasure = useCallback(() => {
     const el = textRef.current;
@@ -1553,6 +1949,10 @@ function BoardCard({
 
   const handleCardPointerDown = (e: React.PointerEvent) => {
     e.stopPropagation();
+    if (ghost) {
+      onDown(e, c.id);
+      return;
+    }
     const target = e.target as HTMLElement;
     if (target.closest("[data-card-action]") || target.closest("[data-handle]")) return;
     onDown(e, c.id);
@@ -1563,41 +1963,118 @@ function BoardCard({
 
   return (
     <div
-      data-card
-      className={`board-card${isSelected ? " card-selected" : ""}${linkDrawMode ? " card-link-mode" : ""}`}
-      style={{ position: "absolute", top: 0, left: 0, width: displayW, transform: `translate(${c.x}px, ${c.y}px)`, transition: isDragging || isResizing ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)", zIndex: isDragging || isSelected ? 20 : 5 }}
+      data-card={ghost ? undefined : true}
+      data-card-ghost={ghost ? true : undefined}
+      className={`board-card${isSelected && !ghost ? " card-selected" : ""}${linkDrawMode ? " card-link-mode" : ""}`}
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: displayW,
+        transform: `translate(${c.x}px, ${c.y}px)`,
+        transition: isDragging || isResizing ? "none" : "transform .45s cubic-bezier(.2,.8,.2,1)",
+        zIndex: ghost ? 3 : (isDragging || isSelected ? 20 : 5),
+        pointerEvents: ghost ? "none" : "auto",
+      }}
     >
       <div
         className="card-pop"
-        style={{ position: "relative", width: displayW, height: displayH, transition: sizeTransition, background: C.white, border: `1px solid ${C.border}`, borderTop: uncategorised ? `2px solid ${C.border}` : `4px solid ${accent}`, borderRadius: 12, padding: "10px 12px", boxShadow: "0 6px 18px rgba(10,22,40,.08)", cursor: "grab", boxSizing: "border-box", display: "flex", flexDirection: "column" }}
-        onPointerDown={handleCardPointerDown}
+        style={{
+          position: "relative",
+          width: displayW,
+          height: displayH,
+          transition: sizeTransition,
+          background: C.white,
+          border: `1px solid ${C.border}`,
+          borderTop: uncategorised ? `2px solid ${C.border}` : `4px solid ${accent}`,
+          borderRadius: 12,
+          padding: "10px 12px",
+          boxShadow: "0 6px 18px rgba(10,22,40,.08)",
+          cursor: ghost ? "default" : "grab",
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          opacity: ghost ? 0.52 : 1,
+        }}
+        onPointerDown={ghost ? undefined : handleCardPointerDown}
       >
+        {ghost && (
+          <span style={{
+            position: "absolute",
+            top: 6,
+            right: 8,
+            fontSize: 9,
+            fontWeight: 700,
+            color: "#7A8499",
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            padding: "1px 5px",
+            zIndex: 2,
+            pointerEvents: "none",
+          }}>
+            ↗ also here
+          </span>
+        )}
         <div
           data-card-header
           style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexShrink: 0, cursor: "default" }}
         >
-          {!uncategorised && t && (
+          {categories.length > 1 ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+              {categories.map((catId, i) => {
+                const th = themeOf(catId);
+                if (!th) return null;
+                return (
+                  <span
+                    key={catId}
+                    title={`${i + 1}. ${th.label}`}
+                    style={{ position: "relative", width: 14, height: 14, flexShrink: 0 }}
+                  >
+                    <span style={{ display: "block", width: 14, height: 14, borderRadius: "50%", background: th.color, border: `1px solid ${C.border}` }} />
+                    <span style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 8,
+                      fontWeight: 800,
+                      color: C.white,
+                      textShadow: "0 0 2px rgba(0,0,0,.45)",
+                    }}>
+                      {i + 1}
+                    </span>
+                  </span>
+                );
+              })}
+            </div>
+          ) : !uncategorised && t ? (
             <span style={{ color: C.white, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 5, background: t.color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>{t.label}</span>
-          )}
+          ) : null}
           {c.ai && <span style={tag.ai}>AI</span>}
-          <button className="card-dup" data-card-action style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.white, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 5, cursor: "pointer", lineHeight: 1.4 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => duplicateCard(c.id)} title="Duplicate">⧉</button>
-          <button
-            data-card-action
-            title="Edit"
-            style={actionBtn}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => onStartEdit(c)}
-            aria-label="Edit card"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-            </svg>
-          </button>
-          <button data-card-action style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
+          {!ghost && (
+            <>
+              <button className="card-dup" data-card-action style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.white, color: C.navy, fontSize: 11, fontWeight: 700, padding: "1px 6px", borderRadius: 5, cursor: "pointer", lineHeight: 1.4 }} onPointerDown={(e) => e.stopPropagation()} onClick={() => duplicateCard(c.id)} title="Duplicate">⧉</button>
+              <button
+                data-card-action
+                title="Edit"
+                style={actionBtn}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => onStartEdit(c)}
+                aria-label="Edit card"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                </svg>
+              </button>
+              <button data-card-action style={{ border: "none", background: "transparent", color: "#9AA3B2", fontSize: 18, lineHeight: 1, cursor: "pointer" }} onPointerDown={(e) => e.stopPropagation()} onClick={() => removeCard(c.id)}>×</button>
+            </>
+          )}
         </div>
 
-        {controlsOpen && (
+        {controlsOpen && !ghost && (
           <div className="card-controls-popover" data-card-action style={{ position: "absolute", top: 36, left: 10, zIndex: 8, display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.border}`, padding: "5px 8px", borderRadius: 8, boxShadow: "0 4px 14px rgba(10,22,40,.12)" }}>
             <div style={{ display: "flex", gap: 3 }}>
               {PALETTE.map((p) => (
@@ -1629,37 +2106,41 @@ function BoardCard({
             ref={textRef}
             style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word" }}
           >{desc}</div>
-          {(showDataChips || showImpactChips) && (
+          {(showDataChips || showImpactChip) && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0, marginTop: 6, flexWrap: "wrap" }}>
               {dataChipLabels.map((dp) => (
                 <span key={dp} style={chipStyle}>{dp}</span>
               ))}
-              {impactChipLabels.map((imp) => (
-                <span key={imp} style={chipStyle}>{imp}</span>
-              ))}
+              {showImpactChip && (
+                <span style={chipStyle}>{impactSummary}</span>
+              )}
             </div>
           )}
         </div>
 
-        <div
-          data-handle="resize"
-          data-card-action
-          className="resize-handle"
-          onPointerDown={(e) => onResizeDown(e, c.id)}
-          style={{ position: "absolute", right: 0, bottom: 0, width: 24, height: 24, cursor: "nwse-resize", touchAction: "none", zIndex: 6, display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}
-        >
-          <span className="handle-mark" style={{ width: 10, height: 10, margin: 2, borderRight: `2px solid ${C.navy}`, borderBottom: `2px solid ${C.navy}`, borderRadius: 1 }} />
-        </div>
-        <div
-          data-handle="connect"
-          data-card-action
-          className="connect-handle"
-          title="Drag to connect"
-          onPointerDown={(e) => onConnectDown(e, c.id)}
-          style={{ position: "absolute", right: -12, top: "50%", transform: "translateY(-50%)", width: 24, height: 24, cursor: "crosshair", touchAction: "none", zIndex: 6, display: "flex", alignItems: "center", justifyContent: "center" }}
-        >
-          <span className="handle-mark" style={{ width: 10, height: 10, borderRadius: 5, background: C.navy, border: `2px solid ${C.white}`, boxShadow: `0 0 0 1px ${C.border}` }} />
-        </div>
+        {!ghost && (
+          <>
+            <div
+              data-handle="resize"
+              data-card-action
+              className="resize-handle"
+              onPointerDown={(e) => onResizeDown(e, c.id)}
+              style={{ position: "absolute", right: 0, bottom: 0, width: 24, height: 24, cursor: "nwse-resize", touchAction: "none", zIndex: 6, display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}
+            >
+              <span className="handle-mark" style={{ width: 10, height: 10, margin: 2, borderRight: `2px solid ${C.navy}`, borderBottom: `2px solid ${C.navy}`, borderRadius: 1 }} />
+            </div>
+            <div
+              data-handle="connect"
+              data-card-action
+              className="connect-handle"
+              title="Drag to connect"
+              onPointerDown={(e) => onConnectDown(e, c.id)}
+              style={{ position: "absolute", right: -12, top: "50%", transform: "translateY(-50%)", width: 24, height: 24, cursor: "crosshair", touchAction: "none", zIndex: 6, display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              <span className="handle-mark" style={{ width: 10, height: 10, borderRadius: 5, background: C.navy, border: `2px solid ${C.white}`, boxShadow: `0 0 0 1px ${C.border}` }} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2149,7 +2630,7 @@ function CategoryDropdown({
   themes: Theme[];
   value: string;
   onChange: (id: string) => void;
-  onCreateCategory: (label: string) => boolean;
+  onCreateCategory: (label: string) => string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2498,6 +2979,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const links = activeBoard?.links ?? [];
   const insight = activeBoard?.insight ?? "";
   const arrangeBy: ArrangeByKey = normalizeArrangeBy(activeBoard?.arrangeBy) ?? "category";
+  const duplicateAcrossCategories = activeBoard?.duplicateAcrossCategories === true;
   const showLinkages = activeBoard?.showLinkages !== false;
   const dataSourceLanes = useMemo(
     () => (arrangeBy === "dataPoint" ? buildDataSourceLanes(cards as WorkshopCard[]) : []),
@@ -2506,6 +2988,12 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const impactLanes = useMemo(
     () => (arrangeBy === "impact" ? buildImpactLanes(cards as WorkshopCard[]) : []),
     [arrangeBy, cards],
+  );
+  const categoryGhosts = useMemo(
+    () => (arrangeBy === "category" && duplicateAcrossCategories
+      ? computeCategoryGhosts(cards as WorkshopCard[], themes)
+      : []),
+    [arrangeBy, duplicateAcrossCategories, cards, themes],
   );
 
   const boardCtxRef = useRef({ boards, activeId });
@@ -2695,18 +3183,19 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     }
   }, [themes, theme]);
 
-  const createCategory = useCallback((label: string) => {
+  const createCategory = useCallback((label: string): string | null => {
     const trimmed = label.trim();
-    if (!trimmed) return false;
+    if (!trimmed) return null;
     const norm = trimmed.toLowerCase();
-    if (themes.some((t) => t.label.trim().toLowerCase() === norm)) return false;
+    const existing = themes.find((t) => t.label.trim().toLowerCase() === norm);
+    if (existing) return existing.id;
     const ids = new Set(themes.map((t) => t.id));
     const id = slugifyThemeId(trimmed, ids);
     const color = CATEGORY_PALETTE[themes.length % CATEGORY_PALETTE.length].color;
     const newTheme: Theme = { id, label: trimmed, color };
     setThemes((prev) => [...prev, newTheme]);
     setTheme(id);
-    return true;
+    return id;
   }, [themes]);
 
   useEffect(() => {
@@ -2717,21 +3206,31 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   }, [cards]);
 
   const updateCard = useCallback((id: string, patch: Record<string, unknown>) => {
-    setCards((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    setCards((c) => c.map((x) => {
+      if (x.id !== id) return x;
+      const next = { ...x, ...patch } as WorkshopCard;
+      if (Array.isArray(patch.categories)) {
+        next.categories = patch.categories.slice(0, MAX_CATEGORIES);
+        next.theme = syncThemeFromCategories(next.categories);
+      }
+      return next;
+    }));
   }, [setCards]);
 
   const makeDraftCard = useCallback((opts: { text?: string; theme?: string | null; ai?: boolean; pos?: { x: number; y: number } }): WorkshopCard => {
-    const th = opts.theme ?? null;
+    const categories = opts.theme ? [opts.theme] : [];
+    const th = syncThemeFromCategories(categories);
     const txt = (opts.text ?? "").trim();
     const reg = th == null ? themes.length : themes.findIndex((x) => x.id === th);
     const col = reg < 0 ? themes.length : reg;
     return {
       id: newId(),
+      categories,
       theme: th,
       text: txt,
       description: txt,
       dataPoints: [NA_DATA_POINT],
-      impacts: [],
+      impact: { types: [] },
       x: opts.pos?.x ?? SECTION_X0 + col * SECTION_COL_W + Math.random() * 40,
       y: opts.pos?.y ?? 320 + Math.random() * 140,
       ai: !!opts.ai,
@@ -2756,10 +3255,13 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     setComposer((prev) => (prev ? { ...prev, draft: { ...prev.draft, ...patch } } : null));
   }, []);
 
-  const composerThemeChange = useCallback((themeId: string | null) => {
-    const col = columnIndex(themeId, themes);
+  const composerCategoriesChange = useCallback((categories: string[]) => {
+    const synced = categories.slice(0, MAX_CATEGORIES);
+    const theme = syncThemeFromCategories(synced);
+    const col = columnIndex(theme, themes);
     updateComposerDraft({
-      theme: themeId,
+      categories: synced,
+      theme,
       x: SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40,
     });
   }, [themes, updateComposerDraft]);
@@ -2777,8 +3279,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       setComposer((prev) => {
         if (!prev) return null;
         const nextDraft = { ...prev.draft, ...patch, classifying: false };
-        if (patch.theme && prev.draft.theme == null && themes.some((t) => t.id === patch.theme)) {
+        if (patch.theme && prev.draft.categories.length === 0 && themes.some((t) => t.id === patch.theme)) {
           const col = columnIndex(patch.theme, themes);
+          nextDraft.categories = patch.categories ?? [patch.theme];
           nextDraft.theme = patch.theme;
           nextDraft.x = SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40;
         }
@@ -2809,6 +3312,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     }
     const final: WorkshopCard = {
       ...d,
+      categories: d.categories ?? (d.theme ? [d.theme] : []),
+      theme: syncThemeFromCategories(d.categories ?? (d.theme ? [d.theme] : [])),
       text: d.text?.trim() || desc,
       description: desc,
       classifying: false,
@@ -2820,9 +3325,10 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       updateCard(final.id, {
         text: final.text,
         description: final.description,
+        categories: final.categories,
         theme: final.theme,
         dataPoints: final.dataPoints,
-        impacts: final.impacts,
+        impact: final.impact,
         x: final.x,
         y: final.y,
         ai: final.ai,
@@ -2884,6 +3390,12 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedLinkId, composer, connecting, linkDrawMode, cancelConnecting, setLinks]);
+
+  const setDuplicateAcrossCategories = useCallback((on: boolean) => {
+    setBoards((bs) => bs.map((b) => (
+      b.id === activeIdRef.current ? { ...b, duplicateAcrossCategories: on } : b
+    )));
+  }, []);
 
   const applyArrange = useCallback((sortBy: ArrangeByKey) => {
     setBoards((bs) => bs.map((b) => {
@@ -3237,17 +3749,20 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     const challengeCards = challengesBoard?.cards ?? [];
     const suggestedCards = aiBoard?.cards ?? [];
     const categorySuggestedCards = suggestedCards.filter((c) => c.theme === categoryId);
-    const { system, content } = buildSingleSuggestPrompt(
-      challengeCards,
-      suggestedCards,
-      categoryName,
-      categorySuggestedCards,
-      resolveThemeLabel,
-    );
 
     const tasks = AI_PROVIDERS.map(({ id }) =>
-      callAIResult(system, content, id).then(({ text, error }) => {
-        console.log(`[board-ai] suggest-use-case → provider: ${id}, category: ${categoryName}`);
+      (async () => {
+        const { system, content } = buildSingleSuggestPrompt(
+          challengeCards,
+          suggestedCards,
+          categoryName,
+          categorySuggestedCards,
+          id,
+          resolveThemeLabel,
+        );
+        const { text, error } = await callAIResult(system, content, id, { temperature: SUGGEST_TEMPERATURE });
+        const snippet = (error ? `error: ${error}` : text || "(empty)").slice(0, 160);
+        console.log(`[board-ai] suggest-use-case → provider: ${id}, category: ${categoryName}, raw: ${snippet}`);
         const candidate = parseSuggestCandidate(text, error);
         setSuggestCandidates((prev) => ({
           ...(prev ?? { claude: loading, gemini: loading, gpt: loading }),
@@ -3256,7 +3771,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         if (candidate.text && !candidate.error) {
           setSelectedSuggestProvider((sel) => sel ?? id);
         }
-      })
+      })()
     );
 
     await Promise.all(tasks);
@@ -3289,13 +3804,14 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     const col = columnIndex(suggestCategory, themes);
     const card: WorkshopCard = {
       id: newId(),
+      categories: [suggestCategory],
       theme: suggestCategory,
       text: candidate.text,
       description: candidate.justification
         ? `${candidate.text}\n\n${candidate.justification}`
         : candidate.text,
       dataPoints: [NA_DATA_POINT],
-      impacts: [],
+      impact: { types: [] },
       x: SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40,
       y: 320 + Math.random() * 140,
       ai: true,
@@ -3419,6 +3935,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                     suggested,
                     categoryName,
                     suggested.filter((c) => c.theme === theme),
+                    "claude",
                     resolveThemeLabel,
                   );
                 }}
@@ -3443,6 +3960,17 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                 {ARRANGE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
               </select>
             </label>
+            {arrangeBy === "category" && (
+              <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", ...(duplicateAcrossCategories ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}) }}>
+                <input
+                  type="checkbox"
+                  checked={duplicateAcrossCategories}
+                  onChange={(e) => setDuplicateAcrossCategories(e.target.checked)}
+                  style={{ accentColor: C.navy, cursor: "pointer" }}
+                />
+                Duplicate across categories
+              </label>
+            )}
             <button
               type="button"
               style={{
@@ -3574,6 +4102,28 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               })()}
             </svg>
 
+            {categoryGhosts.map((g) => (
+              <BoardCard
+                key={`ghost-${g.card.id}-${g.categoryId ?? "uncategorised"}`}
+                c={{ ...g.card, x: g.x, y: g.y }}
+                arrangeBy={arrangeBy}
+                ghost
+                isSelected={false}
+                isDragging={false}
+                isResizing={false}
+                controlsOpen={false}
+                linkDrawMode={linkDrawMode}
+                onDown={() => {}}
+                onResizeDown={() => {}}
+                onConnectDown={() => {}}
+                onStartEdit={() => {}}
+                updateCard={updateCard}
+                duplicateCard={duplicateCard}
+                removeCard={removeCard}
+                themeOf={resolveTheme}
+                getCardAccent={getCardAccent}
+              />
+            ))}
             {cards.map((c) => (
               <BoardCard
                 key={c.id}
@@ -3771,7 +4321,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
           dataPoints={dataPoints}
           impacts={impacts}
           onDraftChange={updateComposerDraft}
-          onThemeChange={composerThemeChange}
+          onCategoriesChange={composerCategoriesChange}
+          onCreateCategory={createCategory}
           onAddDataPoint={addDataPoint}
           onAddImpact={addImpact}
           onDone={composerDone}
@@ -3977,8 +4528,8 @@ function takeawayDataSourcesLine(dataPoints: unknown): string | null {
   return `Data sources: ${summary}`;
 }
 
-function takeawayImpactsLine(raw: unknown, legacy?: { type?: string } | null): string | null {
-  const summary = formatImpactsSummary(normalizeImpacts(raw, legacy));
+function takeawayImpactsLine(card: any): string | null {
+  const summary = formatImpactTakeawaySummary(normalizeImpact(card));
   if (!summary) return null;
   return `Impact: ${summary}`;
 }
@@ -3997,7 +4548,7 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
               const desc = cardDescription(c);
               const meta = [
                 takeawayDataSourcesLine(c.dataPoints ?? c.dataPoint),
-                takeawayImpactsLine(c.impacts ?? c.impact, c.impact),
+                takeawayImpactsLine(c),
               ].filter(Boolean).join(" · ");
               return (
                 <li key={c.id} style={{ color: C.navy, marginBottom: 6 }}>
@@ -4020,7 +4571,7 @@ function BoardTakeawayContent({ cards, insight, themes }: { cards: any[]; insigh
               const desc = cardDescription(c);
               const meta = [
                 takeawayDataSourcesLine(c.dataPoints ?? c.dataPoint),
-                takeawayImpactsLine(c.impacts ?? c.impact, c.impact),
+                takeawayImpactsLine(c),
               ].filter(Boolean).join(" · ");
               return (
                 <li key={c.id} style={{ color: C.navy, marginBottom: 6 }}>
