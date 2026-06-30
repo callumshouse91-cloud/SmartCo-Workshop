@@ -16,8 +16,23 @@ export type NextStepCard = { title: string; desc: string };
 
 export type CredentialCard = { title: string; desc: string };
 
+export type TeamMemberCard = {
+  name: string;
+  role: string;
+  rolePill: string;
+  bio: string;
+  photo: string;
+  initials: string;
+};
+
 export type DeckSlide =
   | { kind: "hero" }
+  | {
+      kind: "whos-in-room";
+      eyebrow: string;
+      title: string;
+      members: TeamMemberCard[];
+    }
   | { kind: "agenda"; title: string; rows: AgendaRow[] }
   | {
       kind: "who-we-are";
@@ -122,6 +137,38 @@ export const TRANSFORMATION_PHASES: PhaseBlock[] = [
 */
 export const DECK: DeckSlide[] = [
   { kind: "hero" },
+
+  {
+    kind: "whos-in-room",
+    eyebrow: "WHO'S IN THE ROOM",
+    title: "Your SmartCo team today",
+    members: [
+      {
+        name: "Oli Kane",
+        role: "Managing Director, SmartCo",
+        rolePill: "Opens & sets context",
+        bio: "Two decades leading enterprise transformation — replacing 40+ legacy systems at Sir Robert McAlpine, an £11m agile transformation at VolkerWessels, and mission-critical platforms at Gatwick. Brings the lens of how complex change actually lands.",
+        photo: "/images/1713961688549.jpg",
+        initials: "OK",
+      },
+      {
+        name: "Callum Campbell",
+        role: "Head of Client Engagement, FS",
+        rolePill: "Engagement lead",
+        bio: "Leads SmartCo's financial services engagements — proposal shaping, AI-led operating models, and regulatory readiness. The bridge between what we explore today and what it means commercially for MUFG.",
+        photo: "/images/1723622814158.jpg",
+        initials: "CC",
+      },
+      {
+        name: "Sheelpa Majithia",
+        role: "Workshop Facilitator",
+        rolePill: "Facilitator",
+        bio: "25+ years of programme and data delivery across the world's largest banks — RBS, HSBC, Barclays, LSEG, the FCA — building data platforms, governance frameworks and AI-enhanced reporting, now certified in AI risk and governance.",
+        photo: "/images/1566749853994.jpg",
+        initials: "SM",
+      },
+    ],
+  },
 
   {
     kind: "agenda",

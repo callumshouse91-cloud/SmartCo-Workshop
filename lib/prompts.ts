@@ -5,6 +5,7 @@ export type PromptPayload = { system: string; content: string };
 export type CaptureCard = {
   id: string;
   text: string;
+  title?: string;
   theme?: string | null;
   description?: string;
   dataPoint?: string;
@@ -84,14 +85,16 @@ function impactExtrasForCard(c: CaptureCard): string[] {
 }
 
 function cardLine(c: CaptureCard, labelFn: ThemeLabelFn): string {
+  const headline = c.title?.trim();
   const body = (c.description ?? c.text).trim();
+  const main = headline ? `${headline} — ${body}` : body;
   const extras: string[] = [];
   const dps = dataPointsForCard(c);
   if (dps.length) extras.push(`data sources: ${dps.join(" + ")}`);
   const impactExtras = impactExtrasForCard(c);
   if (impactExtras.length) extras.push(...impactExtras);
   const suffix = extras.length ? ` (${extras.join("; ")})` : "";
-  return `[${labelFn(c.theme)}] ${body}${suffix}`;
+  return `[${labelFn(c.theme)}] ${main}${suffix}`;
 }
 
 function formatCardLines(cards: CaptureCard[], labelFn: ThemeLabelFn = themeLabel): string {
@@ -110,15 +113,62 @@ export function buildComparePrompt(cards: CaptureCard[], labelFn?: ThemeLabelFn)
   return buildReviewPrompt(cards, labelFn);
 }
 
-export function buildLinkagesPrompt(cards: CaptureCard[]): PromptPayload {
-  const list = cards.map((c) => ({
-    id: c.id,
-    text: (c.description ?? c.text).trim(),
-    theme: c.theme ?? "uncategorised",
-  }));
+export type LinkageMode =
+  | "related"
+  | "dependencies"
+  | "data-source"
+  | "sequencing"
+  | "consolidation"
+  | "compounding";
+
+export const LINKAGE_MODES: { id: LinkageMode; label: string; directional: boolean }[] = [
+  { id: "related", label: "Related", directional: false },
+  { id: "dependencies", label: "Dependencies", directional: true },
+  { id: "data-source", label: "Data source", directional: false },
+  { id: "sequencing", label: "Sequencing", directional: true },
+  { id: "consolidation", label: "Consolidation", directional: false },
+  { id: "compounding", label: "Compounding", directional: false },
+];
+
+const LINKAGE_MODE_INSTRUCTIONS: Record<LinkageMode, string> = {
+  related:
+    "Find pairs that share the same kind of problem, theme, or delivery friction — thematic affinity only (not strict dependency).",
+  dependencies:
+    "Find DIRECTIONAL links where fromId enables, unblocks, or must happen before toId (prerequisite / dependency). directional must be true; fromId→toId matters.",
+  "data-source":
+    "Link cards that share the same data source or system (overlap in dataPoints). Bidirectional affinity — same tool or dataset in common.",
+  sequencing:
+    "Find DIRECTIONAL sequencing: fromId should be tackled first because it unlocks or de-risks toId. Use impact severity and hours/effort as signals for priority. directional must be true.",
+  consolidation:
+    "Link near-duplicate or heavily overlapping use cases that could be merged into one initiative.",
+  compounding:
+    "Link cards that amplify each other — combined value is greater than the sum of parts.",
+};
+
+export function buildLinkagesPrompt(cards: CaptureCard[], mode: LinkageMode = "related"): PromptPayload {
+  const meta = LINKAGE_MODES.find((m) => m.id === mode) ?? LINKAGE_MODES[0];
+  const list = cards.map((c) => {
+    const dps = dataPointsForCard(c);
+    const impacts = impactTypesForCard(c);
+    return {
+      id: c.id,
+      title: c.title?.trim() || undefined,
+      text: (c.description ?? c.text).trim(),
+      theme: c.theme ?? "uncategorised",
+      dataPoints: dps.length ? dps : undefined,
+      impactTypes: impacts.length ? impacts : undefined,
+      severity: c.impact?.severity,
+      hoursPerWeek: c.impact?.hours,
+    };
+  });
   return {
     system:
-      'Return ONLY a JSON array, no prose. Identify pairs of related captured items. Each element: {"a": id, "b": id, "reason": "<=6 words"}. Use only the provided ids. Max 6 pairs.',
+      "You analyse workshop capture cards and propose meaningful linkages. " +
+      `MODE: ${mode} — ${LINKAGE_MODE_INSTRUCTIONS[mode]} ` +
+      "Return ONLY JSON, no prose: an array of links. " +
+      `Each element: {"fromId":"<card id>","toId":"<card id>","kind":"${mode}","directional":${meta.directional},"rationale":"<one short line>"}. ` +
+      "Use only the provided card ids. Return only genuine, useful links (a handful, not every pair). Max 8 links. " +
+      "For directional modes, fromId→toId is meaningful and directional must be true. For non-directional modes, directional must be false.",
     content: JSON.stringify(list),
   };
 }
@@ -201,7 +251,8 @@ export function buildClassifyPrompt(
   return {
     system:
       "You structure workshop capture cards. Return ONLY JSON, no prose: " +
-      '{"description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data sources or N/A>","impact":{"types":["<one or more from the listed impact types>"],"hours":<number, only if Time / effort is selected>,"severity":"<one of Low, Medium, High, Critical>"},"theme":"<best-fit category id>"}. ' +
+      '{"title":"<punchy 3-6 word Title Case label, no trailing period>","description":"<expand the input into 1–2 clear sentences>","dataPoint":"<one of the listed data sources or N/A>","impact":{"types":["<one or more from the listed impact types>"],"hours":<number, only if Time / effort is selected>,"severity":"<one of Low, Medium, High, Critical>"},"theme":"<best-fit category id>"}. ' +
+      "title must be a short scannable label (3-6 words, Title Case, no trailing period). " +
       "Pick the closest existing options. Use N/A for dataPoint if none applies. " +
       "For impact.types pick all that genuinely apply (usually 1–2). Estimate severity from the described pain. " +
       "Include hours only when Time / effort is among types. types may be an empty array; omit severity if unclear. " +

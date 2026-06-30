@@ -13,6 +13,8 @@ import {
   buildReviewPrompt,
   buildSingleSuggestPrompt,
   buildClassifyPrompt,
+  type LinkageMode,
+  LINKAGE_MODES,
   type PromptPayload,
 } from "@/lib/prompts";
 import { DECK, getClosingDeck, getWorkingDeck, isImageSlide } from "./deck";
@@ -54,23 +56,96 @@ const newLinkId = () => `l${++lid}`;
 
 const LINK_COLORS = [C.navy, C.blue, C.mint, C.coral, C.yellow] as const;
 
+type LinkKind = LinkageMode | "manual" | "related";
+
 type LinkData = {
   id: string;
   a: string;
   b: string;
   manual?: boolean;
+  kind?: LinkKind | string;
+  directional?: boolean;
   reason?: string;
   color?: string;
   style?: "solid" | "dashed";
 };
 
+const LINK_KIND_COLORS: Record<string, string> = {
+  manual: C.navy,
+  related: C.blue,
+  dependencies: C.coral,
+  "data-source": C.mint,
+  sequencing: C.yellow,
+  consolidation: "#9333EA",
+  compounding: C.blueDark,
+};
+
+const LINK_KIND_LABELS: Record<string, string> = {
+  manual: "Manual",
+  related: "Related",
+  dependencies: "Dependencies",
+  "data-source": "Data source",
+  sequencing: "Sequencing",
+  consolidation: "Consolidation",
+  compounding: "Compounding",
+};
+
+const LINK_KIND_SHORT: Record<string, string> = {
+  related: "Rel",
+  dependencies: "Dep",
+  "data-source": "Data",
+  sequencing: "Seq",
+  consolidation: "Merge",
+  compounding: "Combo",
+};
+
+function linkKind(l: LinkData): string {
+  if (l.manual) return "manual";
+  return (typeof l.kind === "string" && l.kind.trim()) ? l.kind.trim() : "related";
+}
+
+function linkColorForKind(kind: string, manual?: boolean): string {
+  if (manual) return LINK_KIND_COLORS.manual;
+  return LINK_KIND_COLORS[kind] ?? C.blue;
+}
+
+function linkSlotKey(l: LinkData): string {
+  const kind = linkKind(l);
+  if (l.directional) return `${l.a}|${l.b}|${kind}`;
+  return pairKey(l.a, l.b);
+}
+
+function linkDedupeKey(l: LinkData): string {
+  const kind = linkKind(l);
+  if (l.directional) return `${l.a}|${l.b}|${kind}`;
+  return `${pairKey(l.a, l.b)}|${kind}`;
+}
+
+function isAiLink(l: LinkData): boolean {
+  return !l.manual;
+}
+
 const normalizeLinks = (links: any[]): LinkData[] =>
-  links.map((l) => ({
-    ...l,
-    id: l.id || newLinkId(),
-    color: l.color || (l.manual ? C.navy : C.blue),
-    style: l.style === "dashed" ? "dashed" : "solid",
-  }));
+  links.map((l) => {
+    const manual = l.manual === true;
+    const a = typeof l.a === "string" ? l.a : (typeof l.fromId === "string" ? l.fromId : "");
+    const b = typeof l.b === "string" ? l.b : (typeof l.toId === "string" ? l.toId : "");
+    const kind = manual ? "manual" : (typeof l.kind === "string" && l.kind.trim() ? l.kind.trim() : "related");
+    const directional = l.directional === true;
+    const reason = typeof l.reason === "string" ? l.reason : (typeof l.rationale === "string" ? l.rationale : undefined);
+    return {
+      ...l,
+      id: l.id || newLinkId(),
+      a,
+      b,
+      manual: manual || undefined,
+      kind,
+      directional: directional || undefined,
+      reason,
+      color: l.color || linkColorForKind(kind, manual),
+      style: l.style === "dashed" ? "dashed" : "solid",
+    };
+  });
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
@@ -98,7 +173,7 @@ const pairSlotMaps = (links: LinkData[]) => {
   const counts: Record<string, number> = {};
   const slots: Record<string, number> = {};
   links.forEach((l) => {
-    const key = pairKey(l.a, l.b);
+    const key = linkSlotKey(l);
     counts[key] = (counts[key] || 0) + 1;
   });
   const nextSlot = (key: string) => {
@@ -237,6 +312,7 @@ const MAX_CATEGORIES = 5;
 
 type WorkshopCard = {
   id: string;
+  title: string;
   categories: string[];
   theme: string | null;
   text: string;
@@ -498,11 +574,13 @@ function normalizeArrangeBy(raw: unknown): ArrangeByKey | undefined {
 function normalizeCard(raw: any): WorkshopCard {
   const text = typeof raw?.text === "string" ? raw.text : "";
   const description = typeof raw?.description === "string" ? raw.description : text;
+  const title = typeof raw?.title === "string" ? raw.title.trim() : "";
   const impact = normalizeImpact(raw);
   const categories = normalizeCategories(raw);
   const theme = syncThemeFromCategories(categories);
   return {
     id: raw.id || newId(),
+    title,
     categories,
     theme,
     text,
@@ -679,6 +757,7 @@ async function fetchClassifyFields(
     const { text, error } = await callAIResult(system, content, opts.provider);
     if (error) return { patch: fallback, error };
     const parsed = parseJSON(text) as {
+      title?: string;
       description?: string;
       dataPoint?: string;
       impact?: { types?: string[]; hours?: number; severity?: string };
@@ -691,6 +770,9 @@ async function fetchClassifyFields(
       description: typeof parsed.description === "string" && parsed.description.trim() ? parsed.description.trim() : seed,
       dataPoints: matchedDp ? [matchedDp] : [NA_DATA_POINT],
     };
+    if (typeof parsed.title === "string" && parsed.title.trim()) {
+      patch.title = parsed.title.trim().replace(/\.+$/, "");
+    }
     const rawTypes = Array.isArray(parsed.impact?.types)
       ? parsed.impact.types
       : Array.isArray(parsed.impacts)
@@ -1199,6 +1281,7 @@ function serialiseExportCard(raw: any): Record<string, unknown> {
   const c = normalizeCard(raw);
   const out: Record<string, unknown> = {
     id: c.id,
+    title: c.title,
     text: c.text,
     description: c.description,
     categories: c.categories,
@@ -1264,11 +1347,10 @@ function buildBoardExportSnapshot(board: BoardData, themes: Theme[]): BoardExpor
   return { exportedAt: new Date().toISOString(), board: snapshot };
 }
 
-function cardExportTitle(c: { description?: string; text?: string }): string {
-  const desc = cardDescription(c);
-  const line = desc.split(/\r?\n/)[0]?.trim() || "Untitled";
-  if (line.length <= 100) return line;
-  return `${line.slice(0, 97)}...`;
+function cardExportTitle(c: { title?: string; description?: string; text?: string }): string {
+  const heading = cardDisplayTitle(c);
+  if (heading.length <= 100) return heading;
+  return `${heading.slice(0, 97)}...`;
 }
 
 function formatExportImpactLine(impact: CardImpact): string {
@@ -2043,6 +2125,29 @@ function CardComposerModal({
         </div>
 
         <div style={{ padding: "16px 24px", flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+            Title
+            <input
+              type="text"
+              value={draft.title ?? ""}
+              onChange={(e) => onDraftChange({ title: e.target.value })}
+              placeholder="Short label for this card"
+              autoFocus={mode === "create"}
+              style={{
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 14,
+                fontWeight: 700,
+                color: C.navy,
+                background: C.white,
+                fontFamily: "inherit",
+                outline: "none",
+                boxSizing: "border-box",
+                width: "100%",
+              }}
+            />
+          </label>
           <div
             style={{
               borderRadius: 12,
@@ -2064,7 +2169,7 @@ function CardComposerModal({
                 }}
                 rows={4}
                 placeholder="Describe the pain point or friction…"
-                autoFocus
+                autoFocus={mode === "edit"}
                 style={{
                   border: `1px solid ${C.border}`,
                   borderRadius: 8,
@@ -2171,6 +2276,8 @@ function BoardCard({
   const displayH = cardDisplayH(c, false);
   const maxFs = sizeCapMax(c);
   const desc = cardDescription(c);
+  const heading = cardDisplayTitle(c);
+  const headingTooltip = cardTitleTooltip(c);
   const textRef = useRef<HTMLDivElement>(null);
   const [fitSize, setFitSize] = useState(maxFs);
   const dataChipLabels = arrangeBy === "dataPoint" ? secondaryDataSources(c) : realDataPoints(c.dataPoints);
@@ -2347,6 +2454,29 @@ function BoardCard({
               maxWidth: 320,
             }}
           >
+            <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 10, fontWeight: 700, color: "#7A8499" }}>
+              Title
+              <input
+                type="text"
+                value={c.title ?? ""}
+                onChange={(e) => updateCard(c.id, { title: e.target.value })}
+                onPointerDown={(e) => e.stopPropagation()}
+                placeholder="Short label"
+                style={{
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 6,
+                  padding: "5px 8px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: C.navy,
+                  background: C.white,
+                  fontFamily: "inherit",
+                  outline: "none",
+                  width: "100%",
+                  boxSizing: "border-box",
+                }}
+              />
+            </label>
             <CategoryEditor
               categories={categories}
               themes={themes}
@@ -2382,11 +2512,30 @@ function BoardCard({
           </div>
         )}
 
-        <div data-card-body style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div data-card-body style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", gap: 4 }}>
           <div
-            ref={textRef}
-            style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word" }}
-          >{desc}</div>
+            title={headingTooltip}
+            style={{
+              flexShrink: 0,
+              fontSize: Math.min(14, maxFs + 1),
+              fontWeight: 800,
+              lineHeight: 1.25,
+              color: C.navy,
+              overflow: "hidden",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              wordBreak: "break-word",
+            }}
+          >{heading}</div>
+          {desc ? (
+            <div
+              ref={textRef}
+              style={{ flex: 1, fontSize: fitSize, lineHeight: 1.35, color: C.navy, overflow: "hidden", wordBreak: "break-word", fontWeight: 400 }}
+            >{desc}</div>
+          ) : (
+            <div ref={textRef} style={{ flex: 1, minHeight: 0 }} />
+          )}
           {(showDataChips || showImpactChip) && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0, marginTop: 6, flexWrap: "wrap" }}>
               {dataChipLabels.map((dp) => (
@@ -2677,6 +2826,26 @@ function cardDescription(c: { description?: string; text?: string }) {
   return (c.description ?? c.text ?? "").trim();
 }
 
+function deriveCardTitle(c: { description?: string; text?: string }): string {
+  const desc = cardDescription(c);
+  if (!desc) return "Untitled";
+  const words = desc.split(/\s+/).filter(Boolean);
+  const phrase = words.slice(0, 6).join(" ");
+  const trimmed = phrase.replace(/[.,;:!?]+$/, "").trim();
+  return trimmed || "Untitled";
+}
+
+function cardDisplayTitle(c: { title?: string; description?: string; text?: string }): string {
+  const saved = typeof c.title === "string" ? c.title.trim() : "";
+  if (saved) return saved;
+  return deriveCardTitle(c);
+}
+
+function cardTitleTooltip(c: { title?: string; description?: string; text?: string }): string {
+  const saved = typeof c.title === "string" ? c.title.trim() : "";
+  return saved || deriveCardTitle(c);
+}
+
 const CATEGORY_POPOVER_Z = 10000;
 const CARD_MENU_Z = CATEGORY_POPOVER_Z + 1;
 
@@ -2725,6 +2894,190 @@ const TOOLBAR_BTN_TOGGLE_ON: React.CSSProperties = {
   borderColor: C.navy,
   fontWeight: 700,
 };
+
+function MapLinkagesControl({
+  mode,
+  onModeChange,
+  onRun,
+  onClearMode,
+  onClearAllAi,
+  busy,
+  cardCount,
+  cards,
+}: {
+  mode: LinkageMode;
+  onModeChange: (m: LinkageMode) => void;
+  onRun: () => void;
+  onClearMode: () => void;
+  onClearAllAi: () => void;
+  busy: boolean;
+  cardCount: number;
+  cards: WorkshopCard[];
+}) {
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearPos, setClearPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const clearRef = useRef<HTMLButtonElement>(null);
+  const clearMenuRef = useRef<HTMLDivElement>(null);
+  const modeMeta = LINKAGE_MODES.find((m) => m.id === mode) ?? LINKAGE_MODES[0];
+
+  const closeClear = useCallback(() => {
+    setClearOpen(false);
+    setClearPos(null);
+  }, []);
+
+  const openClear = useCallback(() => {
+    const trigger = clearRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    setClearPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - 200)),
+      top: r.bottom + 6,
+      width: 196,
+    });
+    setClearOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!clearOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeClear(); };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (clearRef.current?.contains(t) || clearMenuRef.current?.contains(t)) return;
+      closeClear();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
+    };
+  }, [clearOpen, closeClear]);
+
+  const clearMenu = clearOpen && clearPos ? (
+    <div
+      ref={clearMenuRef}
+      role="menu"
+      aria-label="Clear AI linkages"
+      style={{
+        position: "fixed",
+        left: clearPos.left,
+        top: clearPos.top,
+        width: clearPos.width,
+        zIndex: CATEGORY_POPOVER_Z,
+        background: C.white,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        boxShadow: "0 10px 30px rgba(10,22,40,.12)",
+        overflow: "hidden",
+        padding: "4px 0",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        style={{ display: "block", width: "100%", border: "none", background: "transparent", color: C.navy, fontSize: 13, fontWeight: 600, padding: "9px 14px", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
+        onClick={() => { onClearMode(); closeClear(); }}
+      >
+        Clear {modeMeta.label.toLowerCase()} links
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        style={{ display: "block", width: "100%", border: "none", background: "transparent", color: C.navy, fontSize: 13, fontWeight: 600, padding: "9px 14px", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
+        onClick={() => { onClearAllAi(); closeClear(); }}
+      >
+        Clear all AI links
+      </button>
+    </div>
+  ) : null;
+
+  return (
+  <div style={{ ...TOOLBAR_CLUSTER, flexWrap: "wrap" }}>
+    <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "9px 10px" }}>
+      <span style={{ fontSize: 12, color: "#7A8499", fontWeight: 600 }}>Mode</span>
+      <select
+        value={mode}
+        onChange={(e) => onModeChange(e.target.value as LinkageMode)}
+        style={{
+          border: "none",
+          background: "transparent",
+          color: C.navy,
+          fontWeight: 700,
+          fontSize: 13,
+          fontFamily: "inherit",
+          cursor: "pointer",
+          outline: "none",
+          maxWidth: 130,
+        }}
+      >
+        {LINKAGE_MODES.map((m) => (
+          <option key={m.id} value={m.id}>{m.label}</option>
+        ))}
+      </select>
+    </label>
+    <button
+      type="button"
+      style={{
+        ...TOOLBAR_BTN,
+        ...(busy ? TOOLBAR_BTN_TOGGLE_ON : {}),
+        opacity: busy || cardCount < 2 ? 0.55 : 1,
+      }}
+      disabled={busy || cardCount < 2}
+      onClick={onRun}
+    >
+      {busy ? "Mapping…" : "Map linkages"}
+    </button>
+    <InfoButton
+      title="Map linkages with AI"
+      description={`Runs AI linkage discovery in ${modeMeta.label} mode. ${modeMeta.directional ? "Directional arrows show from→to." : "Undirected relatedness between cards."} Re-running replaces only links of the same mode; manual links are never removed.`}
+      prompt={() => buildLinkagesPrompt(cards, mode)}
+    />
+    <button
+      ref={clearRef}
+      type="button"
+      style={btn.ghost}
+      aria-haspopup="menu"
+      aria-expanded={clearOpen}
+      onClick={() => (clearOpen ? closeClear() : openClear())}
+    >
+      Clear ▾
+    </button>
+    {typeof document !== "undefined" && clearMenu ? createPortal(clearMenu, document.body) : null}
+  </div>
+  );
+}
+
+function LinkageKindLegend({ links }: { links: LinkData[] }) {
+  const kinds = [...new Set(links.filter(isAiLink).map(linkKind))].filter((k) => k !== "manual");
+  if (!kinds.length) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 8,
+        right: 12,
+        zIndex: 2,
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 8,
+        background: "rgba(255,255,255,.92)",
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        padding: "6px 10px",
+        pointerEvents: "none",
+        maxWidth: 320,
+      }}
+    >
+      {kinds.map((kind) => (
+        <span key={kind} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 700, color: "#5A6478" }}>
+          <span style={{ width: 14, height: 3, borderRadius: 2, background: linkColorForKind(kind) }} />
+          {LINK_KIND_LABELS[kind] ?? kind}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 type ToolbarAiMenuItem = {
   label: string;
@@ -3757,6 +4110,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const [theme, setTheme] = useState("accelerate");
   const [aiToast, setAiToast] = useState<string | null>(null);
   const [busy, setBusy] = useState({ review: false, links: false, ideas: false, compare: false });
+  const [linkageMode, setLinkageMode] = useState<LinkageMode>("related");
   const [showPack, setShowPack] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
   const [compareResults, setCompareResults] = useState<Record<AIProvider, { text: string; error?: string; loading?: boolean }> | null>(null);
@@ -4013,6 +4367,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     const col = reg < 0 ? themes.length : reg;
     return {
       id: newId(),
+      title: "",
       categories,
       theme: th,
       text: txt,
@@ -4101,6 +4456,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       ...d,
       categories: d.categories ?? (d.theme ? [d.theme] : []),
       theme: syncThemeFromCategories(d.categories ?? (d.theme ? [d.theme] : [])),
+      title: (d.title ?? "").trim(),
       text: d.text?.trim() || desc,
       description: desc,
       classifying: false,
@@ -4110,6 +4466,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       setSelectedId(final.id);
     } else {
       updateCard(final.id, {
+        title: final.title,
         text: final.text,
         description: final.description,
         categories: final.categories,
@@ -4431,7 +4788,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         if (connecting.fromId !== id) {
           setLinks((l) => [
             ...l,
-            { id: newLinkId(), a: connecting.fromId, b: id, manual: true, color: C.navy, style: "solid" as const },
+            { id: newLinkId(), a: connecting.fromId, b: id, manual: true, kind: "manual", directional: false, color: C.navy, style: "solid" as const },
           ]);
         }
         cancelConnecting();
@@ -4500,7 +4857,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         if (target && target.id !== connecting.fromId) {
           setLinks((l) => [
             ...l,
-            { id: newLinkId(), a: connecting.fromId, b: target.id, manual: true, color: C.navy, style: "solid" as const },
+            { id: newLinkId(), a: connecting.fromId, b: target.id, manual: true, kind: "manual", directional: false, color: C.navy, style: "solid" as const },
           ]);
         }
       }
@@ -4562,12 +4919,13 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     }
   }
 
-  async function mapLinks() {
+  async function mapLinks(mode: LinkageMode = linkageMode) {
     if (busy.links || cards.length < 2) return;
     setBusy((b) => ({ ...b, links: true }));
-    console.log(`[board-ai] map-linkages → provider: ${DEFAULT_AI_PROVIDER}`);
+    const modeMeta = LINKAGE_MODES.find((m) => m.id === mode) ?? LINKAGE_MODES[0];
+    console.log(`[board-ai] map-linkages → provider: ${DEFAULT_AI_PROVIDER}, mode: ${mode}`);
     try {
-      const { system, content } = buildLinkagesPrompt(cards);
+      const { system, content } = buildLinkagesPrompt(cards, mode);
       const { text, error } = await callAIResult(system, content, DEFAULT_AI_PROVIDER);
       if (error) {
         showAiError(error);
@@ -4575,21 +4933,54 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         const arr = parseJSON(text);
         if (Array.isArray(arr)) {
           const ids = new Set(cards.map((c) => c.id));
-          const aiLinks = arr
-            .filter((p: any) => ids.has(p.a) && ids.has(p.b) && p.a !== p.b)
-            .map((p: any) => ({
-              ...p,
+          const aiLinks: LinkData[] = [];
+          for (const p of arr) {
+            const fromId = typeof p.fromId === "string" ? p.fromId : (typeof p.a === "string" ? p.a : "");
+            const toId = typeof p.toId === "string" ? p.toId : (typeof p.b === "string" ? p.b : "");
+            if (!ids.has(fromId) || !ids.has(toId) || fromId === toId) continue;
+            const kind = typeof p.kind === "string" ? p.kind : mode;
+            const directional = p.directional === true || (p.directional !== false && modeMeta.directional);
+            const reason = typeof p.rationale === "string" ? p.rationale.trim()
+              : (typeof p.reason === "string" ? p.reason.trim() : undefined);
+            aiLinks.push({
               id: newLinkId(),
-              color: C.blue,
-              style: "solid" as const,
-            }));
-          setLinks((l) => [...l.filter((x) => x.manual), ...aiLinks]);
+              a: fromId,
+              b: toId,
+              kind,
+              directional,
+              reason,
+              color: linkColorForKind(kind),
+              style: "solid",
+            });
+          }
+
+          setLinks((existing) => {
+            const kept = existing.filter((x) => x.manual || linkKind(x as LinkData) !== mode);
+            const seen = new Set(kept.map((x) => linkDedupeKey(x as LinkData)));
+            const merged: LinkData[] = kept.map((x) => x as LinkData);
+            for (const link of aiLinks) {
+              const key = linkDedupeKey(link);
+              if (!seen.has(key)) {
+                seen.add(key);
+                merged.push(link);
+              }
+            }
+            return merged;
+          });
         }
       }
     } finally {
       setBusy((b) => ({ ...b, links: false }));
     }
   }
+
+  const clearAiLinksForMode = useCallback((mode: LinkageMode) => {
+    setLinks((l) => l.filter((x) => x.manual || linkKind(x as LinkData) !== mode));
+  }, [setLinks]);
+
+  const clearAllAiLinks = useCallback(() => {
+    setLinks((l) => l.filter((x) => x.manual));
+  }, [setLinks]);
 
   async function runSuggestForCategory(categoryId: string) {
     setBusy((b) => ({ ...b, ideas: true }));
@@ -4658,6 +5049,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     const col = columnIndex(suggestCategory, themes);
     const card: WorkshopCard = {
       id: newId(),
+      title: candidate.text.split(/\s+/).slice(0, 6).join(" ").replace(/[.,;:!?]+$/, "").trim() || candidate.text,
       categories: [suggestCategory],
       theme: suggestCategory,
       text: candidate.text,
@@ -4761,21 +5153,20 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
 
             <ToolbarDivider />
 
+            <MapLinkagesControl
+              mode={linkageMode}
+              onModeChange={setLinkageMode}
+              onRun={() => void mapLinks(linkageMode)}
+              onClearMode={() => clearAiLinksForMode(linkageMode)}
+              onClearAllAi={clearAllAiLinks}
+              busy={busy.links}
+              cardCount={cards.length}
+              cards={cards as WorkshopCard[]}
+            />
+
             <ToolbarAiMenu
-              anyBusy={busy.links || busy.ideas}
+              anyBusy={busy.ideas}
               items={[
-                {
-                  label: "Map linkages with AI",
-                  busyLabel: "Mapping…",
-                  busy: busy.links,
-                  disabled: busy.links,
-                  onSelect: mapLinks,
-                  info: {
-                    title: "Map linkages with AI",
-                    description: "Analyses the cards on the board and draws links between related items. Returns pairs as JSON and adds them to the canvas.",
-                    prompt: () => buildLinkagesPrompt(cards),
-                  },
-                },
                 {
                   label: "Suggest use case",
                   busyLabel: "Thinking…",
@@ -4918,7 +5309,13 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
             ) : arrangeBy === "category" ? (
               <ThemeSectionColumns themes={themes} />
             ) : null}
+            {showLinkages && <LinkageKindLegend links={links as LinkData[]} />}
             <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible", zIndex: 1 }}>
+              <defs>
+                <marker id="link-arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L8,4 L0,8 Z" fill="context-stroke" />
+                </marker>
+              </defs>
               {showLinkages && links.map((l) => {
                 const link = l as LinkData;
                 const a = cards.find((c) => c.id === link.a);
@@ -4926,12 +5323,15 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                 if (!a || !b) return null;
                 const pa = center(a);
                 const pb = center(b);
-                const { slot, total } = linkSlots.nextSlot(pairKey(link.a, link.b));
+                const { slot, total } = linkSlots.nextSlot(linkSlotKey(link));
                 const { pathD, midX, midY } = linkGeometry(pa, pb, slot, total);
                 const manual = !!link.manual;
-                const strokeColor = link.color || (manual ? C.navy : C.blue);
+                const kind = linkKind(link);
+                const strokeColor = link.color || linkColorForKind(kind, manual);
                 const dashed = link.style === "dashed";
                 const selected = selectedLinkId === link.id;
+                const directional = !!link.directional && !manual;
+                const kindShort = LINK_KIND_SHORT[kind];
                 return (
                   <g
                     key={link.id}
@@ -4946,11 +5346,17 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                       fill="none"
                       stroke={strokeColor}
                       strokeWidth="2"
-                      strokeOpacity={manual ? 1 : 0.55}
+                      strokeOpacity={manual ? 1 : 0.65}
                       strokeDasharray={dashed ? "6 4" : undefined}
+                      markerEnd={directional ? "url(#link-arrowhead)" : undefined}
                     />
+                    {!manual && kindShort && (
+                      <text x={midX} y={midY - (link.reason ? 10 : 0)} fill={strokeColor} fontSize="9" fontWeight={800} textAnchor="middle" pointerEvents="none">
+                        {kindShort}
+                      </text>
+                    )}
                     {link.reason && !manual && (
-                      <text x={midX} y={midY - 6} fill={C.navy} fontSize="11" textAnchor="middle" pointerEvents="none">{link.reason}</text>
+                      <text x={midX} y={midY + 8} fill={C.navy} fontSize="10" textAnchor="middle" pointerEvents="none">{link.reason}</text>
                     )}
                     {selected && (
                       <LinkStyleControls

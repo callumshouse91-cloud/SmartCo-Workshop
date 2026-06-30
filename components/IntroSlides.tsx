@@ -10,6 +10,7 @@ import type {
   FocusArea,
   NextStepCard,
   PhaseBlock,
+  TeamMemberCard,
 } from "./deck";
 import { isImageSlide } from "./deck";
 
@@ -171,6 +172,65 @@ export function AgendaSlide({ title, rows }: { title: string; rows: AgendaRow[] 
             </div>
           </div>
         ))}
+      </div>
+    </SlideFit>
+  );
+}
+
+const TEAM_PILL_ACCENTS = [C.blue, C.mint, C.coral];
+
+function TeamMemberPhoto({ src, initials, name }: { src: string; initials: string; name: string }) {
+  const [err, setErr] = useState(false);
+  if (err) {
+    return (
+      <div className="whos-room-photo whos-room-photo--fallback" aria-hidden>
+        {initials}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={name}
+      className="whos-room-photo"
+      onError={() => setErr(true)}
+    />
+  );
+}
+
+export function WhosInTheRoomSlide({
+  eyebrow,
+  title,
+  members,
+}: {
+  eyebrow: string;
+  title: string;
+  members: TeamMemberCard[];
+}) {
+  return (
+    <SlideFit className="intro-slide-has-corner whos-in-room-slide">
+      <SlideCornerAccent />
+      <Eyebrow>{eyebrow}</Eyebrow>
+      <SlideTitle>{title}</SlideTitle>
+      <div className="whos-room-grid">
+        {members.map((m, i) => {
+          const accent = TEAM_PILL_ACCENTS[i % TEAM_PILL_ACCENTS.length];
+          return (
+            <article
+              key={m.name}
+              {...stagger(i, 0.34)}
+              className="whos-room-card"
+            >
+              <TeamMemberPhoto src={m.photo} initials={m.initials} name={m.name} />
+              <h3 className="whos-room-name">{m.name}</h3>
+              <p className="whos-room-role">{m.role}</p>
+              <span className="whos-room-pill" style={{ background: accent }}>
+                {m.rolePill}
+              </span>
+              <p className="whos-room-bio">{m.bio}</p>
+            </article>
+          );
+        })}
       </div>
     </SlideFit>
   );
@@ -502,6 +562,8 @@ export function renderDeckSlide(s: DeckSlide, onEnter: () => void, heroTitle?: R
   switch (s.kind) {
     case "hero":
       return <HeroSlide titleParts={heroTitle} />;
+    case "whos-in-room":
+      return <WhosInTheRoomSlide {...s} />;
     case "agenda":
       return <AgendaSlide title={s.title} rows={s.rows} />;
     case "who-we-are":
