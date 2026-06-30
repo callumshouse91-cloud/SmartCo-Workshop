@@ -13,6 +13,7 @@ import {
   buildReviewPrompt,
   buildSingleSuggestPrompt,
   buildClassifyPrompt,
+  type PromptPayload,
 } from "@/lib/prompts";
 import { DECK, getClosingDeck, getWorkingDeck, isImageSlide } from "./deck";
 import { renderDeckSlide } from "./IntroSlides";
@@ -175,6 +176,7 @@ type BoardData = {
   arrangeBy?: ArrangeByKey;
   duplicateAcrossCategories?: boolean;
   showLinkages?: boolean;
+  removedThemeIds?: string[];
 };
 
 type ArrangeByKey = "category" | "dataPoint" | "impact";
@@ -753,11 +755,15 @@ function CategoryEditor({
   themes,
   onChange,
   onCreateCategory,
+  onDeleteCategory,
+  compact,
 }: {
   categories: string[];
   themes: Theme[];
   onChange: (next: string[]) => void;
   onCreateCategory: (label: string) => string | null;
+  onDeleteCategory?: (id: string) => void;
+  compact?: boolean;
 }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
@@ -780,17 +786,29 @@ function CategoryEditor({
     border: `1.5px solid ${selected ? C.navy : C.border}`,
     background: selected ? C.surface : C.white,
     color: C.navy,
-    fontSize: 11,
+    fontSize: compact ? 10 : 11,
     fontWeight: selected ? 700 : 600,
-    padding: "5px 10px",
+    padding: compact ? "4px 8px" : "5px 10px",
     borderRadius: 999,
     cursor: "pointer",
     fontFamily: "inherit",
     lineHeight: 1.3,
     display: "inline-flex",
     alignItems: "center",
-    gap: 6,
+    gap: compact ? 4 : 6,
   });
+
+  const deleteBtn: React.CSSProperties = {
+    border: "none",
+    background: "transparent",
+    color: "#9AA3B2",
+    fontSize: compact ? 12 : 13,
+    lineHeight: 1,
+    padding: "0 2px",
+    cursor: "pointer",
+    marginLeft: 2,
+    flexShrink: 0,
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -811,16 +829,16 @@ function CategoryEditor({
               style={chipBase(selected)}
               onClick={() => toggle(t.id)}
             >
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: t.color, flexShrink: 0 }} />
+              <span style={{ width: compact ? 7 : 8, height: compact ? 7 : 8, borderRadius: 2, background: t.color, flexShrink: 0 }} />
               {t.label}
               {selected && (
                 <span style={{
-                  minWidth: 16,
-                  height: 16,
+                  minWidth: compact ? 14 : 16,
+                  height: compact ? 14 : 16,
                   borderRadius: 8,
                   background: C.navy,
                   color: C.white,
-                  fontSize: 9,
+                  fontSize: compact ? 8 : 9,
                   fontWeight: 800,
                   display: "inline-flex",
                   alignItems: "center",
@@ -829,6 +847,22 @@ function CategoryEditor({
                 }}>
                   {order + 1}
                 </span>
+              )}
+              {onDeleteCategory && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Delete category ${t.label}`}
+                  style={deleteBtn}
+                  onClick={(e) => { e.stopPropagation(); onDeleteCategory(t.id); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onDeleteCategory(t.id);
+                    }
+                  }}
+                >×</span>
               )}
             </button>
           );
@@ -1008,12 +1042,24 @@ function extractCustomThemes(themes: Theme[]): Theme[] {
   return themes.filter((t) => !DEFAULT_THEME_IDS.has(t.id));
 }
 
-function mergeThemes(saved?: Theme[]): Theme[] {
-  const merged: Theme[] = [...THEMES];
+function collectRemovedThemeIds(boards: BoardData[]): Set<string> {
+  const out = new Set<string>();
+  for (const b of boards) {
+    for (const id of b.removedThemeIds ?? []) {
+      if (typeof id === "string" && id.trim()) out.add(id.trim());
+    }
+  }
+  return out;
+}
+
+function mergeThemes(saved?: Theme[], removedIds?: Set<string>): Theme[] {
+  const removed = removedIds ?? new Set<string>();
+  const merged: Theme[] = THEMES.filter((t) => !removed.has(t.id));
   const ids = new Set(merged.map((t) => t.id));
   const labels = new Set(merged.map((t) => t.label.trim().toLowerCase()));
   for (const t of saved ?? []) {
     if (!t?.id || !t?.label || !t?.color) continue;
+    if (removed.has(t.id)) continue;
     if (ids.has(t.id)) continue;
     const norm = t.label.trim().toLowerCase();
     if (labels.has(norm)) continue;
@@ -1022,6 +1068,13 @@ function mergeThemes(saved?: Theme[]): Theme[] {
     labels.add(norm);
   }
   return merged;
+}
+
+function stripCategoryFromCards(cards: any[], themeId: string): any[] {
+  return cards.map((c) => {
+    const cats = cardCategories(c).filter((id) => id !== themeId);
+    return { ...c, categories: cats, theme: syncThemeFromCategories(cats) };
+  });
 }
 
 function slugifyThemeId(label: string, existing: Set<string>): string {
@@ -1100,6 +1153,9 @@ const normalizeSession = (v: any): SessionPayload => {
       arrangeBy: normalizeArrangeBy(b.arrangeBy),
       duplicateAcrossCategories: b.duplicateAcrossCategories === true ? true : undefined,
       showLinkages: b.showLinkages === false ? false : undefined,
+      removedThemeIds: Array.isArray(b.removedThemeIds)
+        ? b.removedThemeIds.filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
+        : undefined,
     }));
     const activeId = boards.some((b: BoardData) => b.id === v.activeId) ? v.activeId : boards[0].id;
     return { boards, activeId, customThemes, customDataPoints: v.customDataPoints, customImpacts: v.customImpacts };
@@ -1113,6 +1169,180 @@ const normalizeSession = (v: any): SessionPayload => {
 
 const boardSnapshot = (boards: BoardData[], activeId: string, zoom: number, pan: { x: number; y: number }) =>
   boards.map((b) => (b.id === activeId ? { ...b, zoom, pan } : b));
+
+function downloadBlob(content: string, filename: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function slugifyExportName(name: string): string {
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "board";
+}
+
+function exportFilenameBoard(name: string, ext: "json" | "md"): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `smartco-board-${slugifyExportName(name)}-${ts}.${ext}`;
+}
+
+function serialiseExportCard(raw: any): Record<string, unknown> {
+  const c = normalizeCard(raw);
+  const out: Record<string, unknown> = {
+    id: c.id,
+    text: c.text,
+    description: c.description,
+    categories: c.categories,
+    theme: c.theme,
+    dataPoints: c.dataPoints,
+    impact: c.impact,
+    x: c.x,
+    y: c.y,
+    ai: c.ai,
+  };
+  if (c.color != null) out.color = c.color;
+  if (c.size != null) out.size = c.size;
+  if (c.w != null) out.w = c.w;
+  if (c.h != null) out.h = c.h;
+  return out;
+}
+
+function customThemesForBoard(cards: any[], themes: Theme[]): Theme[] {
+  const used = new Set<string>();
+  for (const card of cards) {
+    for (const cat of cardCategories(card)) {
+      if (!DEFAULT_THEME_IDS.has(cat)) used.add(cat);
+    }
+  }
+  return themes.filter((t) => used.has(t.id));
+}
+
+type BoardExportPayload = {
+  exportedAt: string;
+  board: {
+    id: string;
+    name: string;
+    cards: Record<string, unknown>[];
+    links: LinkData[];
+    insight: string;
+    customThemes: Theme[];
+    zoom?: number;
+    pan?: { x: number; y: number };
+    arrangeBy?: ArrangeByKey;
+    duplicateAcrossCategories?: boolean;
+    showLinkages?: boolean;
+    removedThemeIds?: string[];
+  };
+};
+
+function buildBoardExportSnapshot(board: BoardData, themes: Theme[]): BoardExportPayload {
+  const snapshot: BoardExportPayload["board"] = {
+    id: board.id,
+    name: board.name,
+    cards: board.cards.map(serialiseExportCard),
+    links: normalizeLinks(Array.isArray(board.links) ? board.links : []),
+    insight: board.insight ?? "",
+    customThemes: customThemesForBoard(board.cards, themes),
+  };
+  if (typeof board.zoom === "number") snapshot.zoom = board.zoom;
+  if (board.pan && typeof board.pan.x === "number" && typeof board.pan.y === "number") {
+    snapshot.pan = { x: board.pan.x, y: board.pan.y };
+  }
+  if (board.arrangeBy) snapshot.arrangeBy = board.arrangeBy;
+  if (board.duplicateAcrossCategories) snapshot.duplicateAcrossCategories = true;
+  if (board.showLinkages === false) snapshot.showLinkages = false;
+  if (board.removedThemeIds?.length) snapshot.removedThemeIds = [...board.removedThemeIds];
+  return { exportedAt: new Date().toISOString(), board: snapshot };
+}
+
+function cardExportTitle(c: { description?: string; text?: string }): string {
+  const desc = cardDescription(c);
+  const line = desc.split(/\r?\n/)[0]?.trim() || "Untitled";
+  if (line.length <= 100) return line;
+  return `${line.slice(0, 97)}...`;
+}
+
+function formatExportImpactLine(impact: CardImpact): string {
+  const parts: string[] = [];
+  if (impact.types.length) {
+    const typeParts = impact.types.map((t) => {
+      if (t === HOURS_IMPACT_TYPE && impact.hours != null && impact.hours > 0) return `${t} (${impact.hours} hrs/wk)`;
+      return t;
+    });
+    parts.push(typeParts.join(" · "));
+  }
+  if (impact.severity) parts.push(impact.severity);
+  return parts.join(" · ") || "—";
+}
+
+function boardToMarkdown(board: BoardData, themes: Theme[], exportedAt: string): string {
+  const labelFn = makeThemeLabel(themes);
+  const lines: string[] = [];
+  lines.push(`# ${board.name}`);
+  lines.push("");
+  lines.push(`*Exported ${new Date(exportedAt).toLocaleString()}*`);
+  lines.push("");
+
+  const groups: { key: string | null; label: string }[] = themes.map((t) => ({ key: t.id, label: t.label }));
+  groups.push({ key: null, label: "Uncategorised" });
+
+  for (const group of groups) {
+    const items = board.cards.filter((raw) => {
+      const primary = primaryCategory(raw);
+      if (group.key === null) return !primary;
+      return primary === group.key;
+    });
+    if (!items.length) continue;
+    lines.push(`## ${group.label}`);
+    lines.push("");
+    for (const raw of items) {
+      const c = normalizeCard(raw);
+      lines.push(`### ${cardExportTitle(c)}`);
+      lines.push("");
+      const body = cardDescription(c);
+      if (body) {
+        lines.push(body);
+        lines.push("");
+      }
+      const catLabels = cardCategories(c).map((id) => labelFn(id));
+      const dataPts = realDataPoints(c.dataPoints).join(", ") || "—";
+      const impact = formatExportImpactLine(c.impact);
+      const details: string[] = [];
+      details.push(`Categories: ${catLabels.length ? catLabels.join(" → ") : "Uncategorised"}`);
+      details.push(`Data points: ${dataPts}`);
+      details.push(`Impact: ${impact}`);
+      lines.push(`*${details.join(" · ")}*`);
+      lines.push("");
+    }
+  }
+
+  if (board.insight?.trim()) {
+    lines.push("## AI synthesis");
+    lines.push("");
+    for (const line of board.insight.split("\n").filter(Boolean)) {
+      lines.push(line);
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function allBoardsToMarkdown(boards: BoardData[], themes: Theme[]): string {
+  const exportedAt = new Date().toISOString();
+  return boards
+    .map((b, i) => {
+      const section = boardToMarkdown(b, themes, exportedAt);
+      return i === 0 ? section : `\n---\n\n${section}`;
+    })
+    .join("");
+}
 
 const cardW = (c: { w?: number }) => c.w ?? CARD_W;
 const cardH = (c: { h?: number }) => c.h ?? CARD_H;
@@ -1745,6 +1975,7 @@ function CardComposerModal({
   onDraftChange,
   onCategoriesChange,
   onCreateCategory,
+  onDeleteCategory,
   onAddDataPoint,
   onAddImpact,
   onDone,
@@ -1759,6 +1990,7 @@ function CardComposerModal({
   onDraftChange: (patch: Partial<WorkshopCard>) => void;
   onCategoriesChange: (categories: string[]) => void;
   onCreateCategory: (label: string) => string | null;
+  onDeleteCategory: (id: string) => void;
   onAddDataPoint: (v: string) => void;
   onAddImpact: (v: string) => void;
   onDone: () => void;
@@ -1855,6 +2087,7 @@ function CardComposerModal({
               themes={themes}
               onChange={onCategoriesChange}
               onCreateCategory={onCreateCategory}
+              onDeleteCategory={onDeleteCategory}
             />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignItems: "start" }}>
               <PortaledMultiSelect
@@ -1902,6 +2135,7 @@ function BoardCard({
   onDown, onResizeDown, onConnectDown, onStartEdit,
   updateCard, duplicateCard, removeCard,
   themeOf, getCardAccent,
+  themes, onCardCategoriesChange, onCreateCategory, onDeleteCategory, onToggleControls,
 }: {
   c: WorkshopCard;
   isSelected: boolean;
@@ -1920,6 +2154,11 @@ function BoardCard({
   removeCard: (id: string) => void;
   themeOf: (id: string | null | undefined) => Theme | null;
   getCardAccent: (c: { color?: string; theme?: string | null }) => string;
+  themes: Theme[];
+  onCardCategoriesChange: (id: string, categories: string[]) => void;
+  onCreateCategory: (label: string) => string | null;
+  onDeleteCategory: (id: string) => void;
+  onToggleControls: (id: string) => void;
 }) {
   const categories = cardCategories(c);
   const t = themeOf(c.theme);
@@ -2023,7 +2262,12 @@ function BoardCard({
         )}
         <div
           data-card-header
-          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexShrink: 0, cursor: "default" }}
+          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexShrink: 0, cursor: "pointer" }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest("[data-card-action]")) return;
+            onToggleControls(c.id);
+          }}
         >
           {categories.length > 1 ? (
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
@@ -2080,28 +2324,57 @@ function BoardCard({
         </div>
 
         {controlsOpen && !ghost && (
-          <div className="card-controls-popover" data-card-action style={{ position: "absolute", top: 36, left: 10, zIndex: 8, display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.border}`, padding: "5px 8px", borderRadius: 8, boxShadow: "0 4px 14px rgba(10,22,40,.12)" }}>
-            <div style={{ display: "flex", gap: 3 }}>
-              {PALETTE.map((p) => (
-                <button
-                  key={p.label}
-                  title={p.label}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => updateCard(c.id, { color: p.color })}
-                  style={{ width: 14, height: 14, borderRadius: 3, padding: 0, cursor: "pointer", background: p.color, border: c.color === p.color || (!c.color && t && p.color === t.color) ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent" }}
-                />
-              ))}
-            </div>
-            <div style={{ width: 1, height: 14, background: C.border }} />
-            <div style={{ display: "flex", gap: 2 }}>
-              {([["S", 13], ["M", 16], ["L", 20]] as const).map(([label, px]) => (
-                <button
-                  key={label}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => updateCard(c.id, { size: px })}
-                  style={{ border: `1px solid ${c.size === px ? C.navy : C.border}`, background: c.size === px ? C.surface : C.white, color: C.navy, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, cursor: "pointer", lineHeight: 1.4 }}
-                >{label}</button>
-              ))}
+          <div
+            className="card-controls-popover"
+            data-card-action
+            style={{
+              position: "absolute",
+              top: 36,
+              left: 10,
+              zIndex: 8,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              background: C.white,
+              border: `1px solid ${C.border}`,
+              padding: "8px 10px",
+              borderRadius: 8,
+              boxShadow: "0 4px 14px rgba(10,22,40,.12)",
+              minWidth: 260,
+              maxWidth: 320,
+            }}
+          >
+            <CategoryEditor
+              categories={categories}
+              themes={themes}
+              onChange={(next) => onCardCategoriesChange(c.id, next)}
+              onCreateCategory={onCreateCategory}
+              onDeleteCategory={onDeleteCategory}
+              compact
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", gap: 3 }}>
+                {PALETTE.map((p) => (
+                  <button
+                    key={p.label}
+                    title={p.label}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => updateCard(c.id, { color: p.color })}
+                    style={{ width: 14, height: 14, borderRadius: 3, padding: 0, cursor: "pointer", background: p.color, border: c.color === p.color || (!c.color && t && p.color === t.color) ? `2px solid ${C.navy}` : p.color === C.white ? `1px solid ${C.border}` : "1px solid transparent" }}
+                  />
+                ))}
+              </div>
+              <div style={{ width: 1, height: 14, background: C.border }} />
+              <div style={{ display: "flex", gap: 2 }}>
+                {([["S", 13], ["M", 16], ["L", 20]] as const).map(([label, px]) => (
+                  <button
+                    key={label}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => updateCard(c.id, { size: px })}
+                    style={{ border: `1px solid ${c.size === px ? C.navy : C.border}`, background: c.size === px ? C.surface : C.white, color: C.navy, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, cursor: "pointer", lineHeight: 1.4 }}
+                  >{label}</button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -2404,6 +2677,394 @@ function cardDescription(c: { description?: string; text?: string }) {
 const CATEGORY_POPOVER_Z = 10000;
 const CARD_MENU_Z = CATEGORY_POPOVER_Z + 1;
 
+const TOOLBAR_BTN: React.CSSProperties = {
+  background: C.white,
+  color: C.navy,
+  border: `1px solid ${C.border}`,
+  padding: "9px 16px",
+  borderRadius: 8,
+  fontWeight: 600,
+  fontSize: 13,
+  cursor: "pointer",
+  fontFamily: "inherit",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  whiteSpace: "nowrap",
+};
+
+const TOOLBAR_CLUSTER: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "nowrap",
+  flexShrink: 0,
+};
+
+function ToolbarDivider() {
+  return (
+    <div
+      aria-hidden
+      style={{
+        width: 1,
+        alignSelf: "stretch",
+        minHeight: 28,
+        background: C.border,
+        margin: "0 10px",
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+const TOOLBAR_BTN_TOGGLE_ON: React.CSSProperties = {
+  background: C.surface,
+  borderColor: C.navy,
+  fontWeight: 700,
+};
+
+type ToolbarAiMenuItem = {
+  label: string;
+  busyLabel: string;
+  busy?: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+  info: {
+    title: string;
+    description: string;
+    prompt: () => PromptPayload;
+  };
+};
+
+function ToolbarAiMenu({ items, anyBusy }: { items: ToolbarAiMenuItem[]; anyBusy?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const busyActive = anyBusy ?? items.some((item) => item.disabled && item.busyLabel !== item.label);
+
+  const measurePos = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const menu = menuRef.current;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 280);
+    const gap = 6;
+    const menuH = menu?.offsetHeight ?? 160;
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
+    let top = r.bottom + gap;
+    if (top + menuH > window.innerHeight - 8) {
+      top = Math.max(8, r.top - menuH - gap);
+    }
+    return { left, top, width };
+  }, []);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setPos(null);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 280);
+    setPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
+      top: r.bottom + 6,
+      width,
+    });
+    setOpen(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const next = measurePos();
+    if (next) setPos(next);
+  }, [open, items.length, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onReflow = () => {
+      const next = measurePos();
+      if (next) setPos(next);
+    };
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
+    };
+  }, [open, close]);
+
+  const rowBtn: React.CSSProperties = {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    border: "none",
+    background: "transparent",
+    color: C.navy,
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "9px 12px",
+    cursor: "pointer",
+    textAlign: "left",
+    fontFamily: "inherit",
+    minWidth: 0,
+  };
+
+  const menu = open && pos ? (
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label="AI actions"
+      style={{
+        position: "fixed",
+        left: pos.left,
+        top: pos.top,
+        width: pos.width,
+        zIndex: CATEGORY_POPOVER_Z,
+        background: C.white,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        boxShadow: "0 10px 30px rgba(10,22,40,.12)",
+        overflow: "hidden",
+        padding: "4px 0",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {items.map((item) => (
+        <div
+          key={item.label}
+          role="none"
+          style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: 6 }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            style={{
+              ...rowBtn,
+              opacity: item.disabled ? 0.5 : 1,
+              cursor: item.disabled ? "not-allowed" : "pointer",
+            }}
+            disabled={item.disabled}
+            onClick={() => {
+              if (item.disabled) return;
+              item.onSelect();
+              close();
+            }}
+          >
+            {item.busy ? item.busyLabel : item.label}
+          </button>
+          <span onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <InfoButton
+              align="right"
+              title={item.info.title}
+              description={item.info.description}
+              prompt={item.info.prompt}
+            />
+          </span>
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          ...TOOLBAR_BTN,
+          ...(open || busyActive ? TOOLBAR_BTN_TOGGLE_ON : {}),
+        }}
+        onClick={() => (open ? close() : openMenu())}
+      >
+        AI
+        <span style={{ color: "#9AA3B2", fontSize: 10 }} aria-hidden>▾</span>
+      </button>
+      {typeof document !== "undefined" && menu ? createPortal(menu, document.body) : null}
+    </>
+  );
+}
+
+type ToolbarExportMenuItem = {
+  label: string;
+  onSelect: () => void;
+};
+
+function ToolbarExportMenu({ items }: { items: ToolbarExportMenuItem[] }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const measurePos = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const menu = menuRef.current;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 220);
+    const gap = 6;
+    const menuH = menu?.offsetHeight ?? 120;
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
+    let top = r.bottom + gap;
+    if (top + menuH > window.innerHeight - 8) {
+      top = Math.max(8, r.top - menuH - gap);
+    }
+    return { left, top, width };
+  }, []);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setPos(null);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 220);
+    setPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
+      top: r.bottom + 6,
+      width,
+    });
+    setOpen(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const next = measurePos();
+    if (next) setPos(next);
+  }, [open, items.length, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onReflow = () => {
+      const next = measurePos();
+      if (next) setPos(next);
+    };
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
+    };
+  }, [open, close]);
+
+  const rowBtn: React.CSSProperties = {
+    display: "block",
+    width: "100%",
+    border: "none",
+    background: "transparent",
+    color: C.navy,
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "9px 14px",
+    cursor: "pointer",
+    textAlign: "left",
+    fontFamily: "inherit",
+  };
+
+  const menu = open && pos ? (
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label="Export board"
+      style={{
+        position: "fixed",
+        left: pos.left,
+        top: pos.top,
+        width: pos.width,
+        zIndex: CATEGORY_POPOVER_Z,
+        background: C.white,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        boxShadow: "0 10px 30px rgba(10,22,40,.12)",
+        overflow: "hidden",
+        padding: "4px 0",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          role="menuitem"
+          style={rowBtn}
+          onClick={() => {
+            item.onSelect();
+            close();
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          ...TOOLBAR_BTN,
+          ...(open ? TOOLBAR_BTN_TOGGLE_ON : {}),
+        }}
+        onClick={() => (open ? close() : openMenu())}
+      >
+        Export
+        <span style={{ color: "#9AA3B2", fontSize: 10 }} aria-hidden>▾</span>
+      </button>
+      {typeof document !== "undefined" && menu ? createPortal(menu, document.body) : null}
+    </>
+  );
+}
+
 function ImpactIcon({ name }: { name: string }) {
   const glyphs: Record<string, string> = {
     "Time / effort": "T",
@@ -2650,11 +3311,13 @@ function CategoryDropdown({
   value,
   onChange,
   onCreateCategory,
+  onDeleteCategory,
 }: {
   themes: Theme[];
   value: string;
   onChange: (id: string) => void;
   onCreateCategory: (label: string) => string | null;
+  onDeleteCategory: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2825,17 +3488,34 @@ function CategoryDropdown({
             {themes.map((t) => {
               const selected = t.id === value;
               return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  style={itemStyle(selected)}
-                  onClick={() => { onChange(t.id); close(); }}
-                >
-                  <span style={{ width: 10, height: 10, borderRadius: 2, background: t.color, flexShrink: 0 }} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.label}</span>
-                </button>
+                <div key={t.id} style={{ display: "flex", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    style={{ ...itemStyle(selected), flex: 1, minWidth: 0 }}
+                    onClick={() => { onChange(t.id); close(); }}
+                  >
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: t.color, flexShrink: 0 }} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.label}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete category ${t.label}`}
+                    title={`Delete ${t.label}`}
+                    onClick={(e) => { e.stopPropagation(); onDeleteCategory(t.id); close(); }}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#9AA3B2",
+                      fontSize: 16,
+                      lineHeight: 1,
+                      padding: "9px 10px",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >×</button>
+                </div>
               );
             })}
           </div>
@@ -3138,12 +3818,22 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     (async () => {
       const apply = (raw: any) => {
         const session = normalizeSession(raw);
-        setBoards(session.boards);
+        const removed = collectRemovedThemeIds(session.boards);
+        const mergedThemes = mergeThemes(session.customThemes, removed);
+        const themeIds = new Set(mergedThemes.map((t) => t.id));
+        const boards = session.boards.map((b) => ({
+          ...b,
+          cards: b.cards.map((c) => {
+            const cats = cardCategories(c).filter((id) => themeIds.has(id));
+            return { ...c, categories: cats, theme: syncThemeFromCategories(cats) };
+          }),
+        }));
+        setBoards(boards);
         setActiveId(session.activeId);
-        setThemes(mergeThemes(session.customThemes));
+        setThemes(mergedThemes);
         setDataPoints(mergeStringOptions(DEFAULT_DATA_POINTS, session.customDataPoints, { appendNa: true }));
         setImpacts(mergeStringOptions(DEFAULT_IMPACTS, session.customImpacts));
-        const active = session.boards.find((b) => b.id === session.activeId) ?? session.boards[0];
+        const active = boards.find((b) => b.id === session.activeId) ?? boards[0];
         setZoom(active?.zoom ?? 1);
         setPan(active?.pan ?? { x: 0, y: 0 });
       };
@@ -3202,8 +3892,12 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   }, []);
 
   useEffect(() => {
+    if (!themes.length) {
+      if (theme) setTheme("");
+      return;
+    }
     if (!themes.some((t) => t.id === theme)) {
-      setTheme(themes[0]?.id ?? "accelerate");
+      setTheme(themes[0].id);
     }
   }, [themes, theme]);
 
@@ -3221,6 +3915,58 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     setTheme(id);
     return id;
   }, [themes]);
+
+  const deleteCategory = useCallback((themeId: string) => {
+    const target = themes.find((t) => t.id === themeId);
+    if (!target) return;
+    if (!window.confirm(`Delete '${target.label}'? Cards in it become Uncategorised.`)) return;
+
+    const isDefault = DEFAULT_THEME_IDS.has(themeId);
+    const nextThemes = themes.filter((t) => t.id !== themeId);
+    setThemes(nextThemes);
+
+    setBoards((bs) => {
+      const aid = activeIdRef.current;
+      return bs.map((b) => {
+        const stripped = stripCategoryFromCards(b.cards, themeId);
+        let updated: BoardData = { ...b, cards: stripped };
+        if (isDefault && b.id === aid) {
+          const removed = b.removedThemeIds ?? [];
+          updated = {
+            ...updated,
+            removedThemeIds: removed.includes(themeId) ? removed : [...removed, themeId],
+          };
+        }
+        if (b.id === aid && (normalizeArrangeBy(b.arrangeBy) ?? "category") === "category") {
+          updated = {
+            ...updated,
+            cards: layoutCards(stripped as WorkshopCard[], "category", nextThemes),
+          };
+        }
+        return updated;
+      });
+    });
+
+    setComposer((prev) => {
+      if (!prev) return null;
+      const cats = prev.draft.categories.filter((id) => id !== themeId);
+      return {
+        ...prev,
+        draft: {
+          ...prev.draft,
+          categories: cats,
+          theme: syncThemeFromCategories(cats),
+        },
+      };
+    });
+
+    if (theme === themeId) {
+      setTheme(nextThemes[0]?.id ?? "");
+    }
+    if (suggestCategory === themeId) {
+      setSuggestCategory(nextThemes[0]?.id ?? "accelerate");
+    }
+  }, [themes, theme, suggestCategory]);
 
   useEffect(() => {
     if (!cards.length) return;
@@ -3240,6 +3986,21 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       return next;
     }));
   }, [setCards]);
+
+  const cardCategoriesChange = useCallback((id: string, categories: string[]) => {
+    const synced = categories.slice(0, MAX_CATEGORIES);
+    const th = syncThemeFromCategories(synced);
+    const patch: Record<string, unknown> = { categories: synced, theme: th };
+    if (arrangeBy === "category") {
+      patch.x = SECTION_X0 + columnIndex(th, themes) * SECTION_COL_W + 20 + Math.random() * 40;
+    }
+    updateCard(id, patch);
+  }, [updateCard, arrangeBy, themes]);
+
+  const toggleCardControls = useCallback((id: string) => {
+    setControlsCardId((prev) => (prev === id ? null : id));
+    setSelectedId(id);
+  }, []);
 
   const makeDraftCard = useCallback((opts: { text?: string; theme?: string | null; ai?: boolean; pos?: { x: number; y: number } }): WorkshopCard => {
     const categories = opts.theme ? [opts.theme] : [];
@@ -3427,6 +4188,70 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       return { ...b, arrangeBy: sortBy, cards: layoutCards(b.cards as WorkshopCard[], sortBy, themes) };
     }));
   }, [themes]);
+
+  const getExportBoard = useCallback((): BoardData | null => {
+    if (!activeBoard) return null;
+    return { ...activeBoard, zoom, pan };
+  }, [activeBoard, zoom, pan]);
+
+  const downloadActiveBoardJson = useCallback(() => {
+    const board = getExportBoard();
+    if (!board) return;
+    const payload = buildBoardExportSnapshot(board, themes);
+    downloadBlob(JSON.stringify(payload, null, 2), exportFilenameBoard(board.name, "json"), "application/json");
+  }, [getExportBoard, themes]);
+
+  const downloadActiveBoardMarkdown = useCallback(() => {
+    const board = getExportBoard();
+    if (!board) return;
+    const exportedAt = new Date().toISOString();
+    downloadBlob(
+      boardToMarkdown(board, themes, exportedAt),
+      exportFilenameBoard(board.name, "md"),
+      "text/markdown;charset=utf-8",
+    );
+  }, [getExportBoard, themes]);
+
+  const downloadAllBoardsJson = useCallback(() => {
+    const exportedAt = new Date().toISOString();
+    const snapshotBoards = boardSnapshot(boards, activeId, zoom, pan).map((b) =>
+      buildBoardExportSnapshot(b, themes).board,
+    );
+    downloadBlob(
+      JSON.stringify({ exportedAt, boards: snapshotBoards }, null, 2),
+      exportFilenameBoard("all-boards", "json"),
+      "application/json",
+    );
+  }, [boards, activeId, zoom, pan, themes]);
+
+  const downloadAllBoardsMarkdown = useCallback(() => {
+    const snapshotBoards = boardSnapshot(boards, activeId, zoom, pan);
+    downloadBlob(
+      allBoardsToMarkdown(snapshotBoards, themes),
+      exportFilenameBoard("all-boards", "md"),
+      "text/markdown;charset=utf-8",
+    );
+  }, [boards, activeId, zoom, pan, themes]);
+
+  const exportMenuItems = useMemo((): ToolbarExportMenuItem[] => {
+    const items: ToolbarExportMenuItem[] = [
+      { label: "Download JSON", onSelect: downloadActiveBoardJson },
+      { label: "Download Markdown", onSelect: downloadActiveBoardMarkdown },
+    ];
+    if (boards.length > 1) {
+      items.push(
+        { label: "Download JSON (all boards)", onSelect: downloadAllBoardsJson },
+        { label: "Download Markdown (all boards)", onSelect: downloadAllBoardsMarkdown },
+      );
+    }
+    return items;
+  }, [
+    boards.length,
+    downloadActiveBoardJson,
+    downloadActiveBoardMarkdown,
+    downloadAllBoardsJson,
+    downloadAllBoardsMarkdown,
+  ]);
 
   const submit = () => {
     openComposerCreate({ text: text.trim(), theme });
@@ -3902,10 +4727,10 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         >▾</button>
       )}
 
-      <div className="board-panel-transition" style={{ flexShrink: 0, overflow: "hidden", maxHeight: collapsed.top ? 0 : 140 }}>
-        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "14px 20px", background: C.white, borderBottom: `1px solid ${C.border}`, flexWrap: "wrap", position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <button style={btn.ghost} onClick={onBack}>← Deck</button>
+      <div className="board-panel-transition" style={{ flexShrink: 0, overflow: "hidden", maxHeight: collapsed.top ? 0 : 168 }}>
+        <header style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 20px 14px", background: C.white, borderBottom: `1px solid ${C.border}`, position: "relative" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "nowrap", paddingRight: 40 }}>
+            <button type="button" style={btn.ghost} onClick={onBack}>← Deck</button>
             <button
               type="button"
               style={{ ...btn.ghost, borderColor: C.coral, color: C.coral, fontWeight: 700 }}
@@ -3921,96 +4746,114 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               description="Capture pains and ideas on a themed whiteboard. Drag cards, draw links between them, and edit inline. Your board autosaves to Supabase every few seconds, with localStorage as an offline fallback."
             />
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
-            <QuestionsNavLink style={{ textDecoration: "none" }} />
-            <AskButton />
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <button style={btn.ai(C.yellow)} onClick={compareModels} disabled={busy.compare || !cards.length}>{busy.compare ? "Comparing…" : "Compare models"}</button>
-              <InfoButton
-                align="right"
-                title="Compare models"
-                description="Sends the same prompt to Claude, Gemini, and GPT in parallel and shows the three answers side by side for comparison."
-                prompt={() => buildComparePrompt(cards, resolveThemeLabel)}
-              />
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <button style={btn.ai(C.blue)} onClick={mapLinks} disabled={busy.links}>{busy.links ? "Mapping…" : "Map linkages with AI"}</button>
-              <InfoButton
-                align="right"
-                title="Map linkages with AI"
-                description="Analyses the cards on the board and draws links between related items. Returns pairs as JSON and adds them to the canvas."
-                prompt={() => buildLinkagesPrompt(cards)}
-              />
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <button style={btn.ai(C.mint)} onClick={suggestIdeas} disabled={busy.ideas}>{busy.ideas ? "Thinking…" : "Suggest use case"}</button>
-              <InfoButton
-                align="right"
-                title="Suggest use case"
-                description="Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board."
-                prompt={() => {
-                  const challengesBoard = getChallengesBoard(boards);
-                  const aiBoard = findAiUseCasesBoard(boards);
-                  const suggested = aiBoard?.cards ?? [];
-                  const categoryName = resolveThemeLabel(theme);
-                  return buildSingleSuggestPrompt(
-                    challengesBoard?.cards ?? [],
-                    suggested,
-                    categoryName,
-                    suggested.filter((c) => c.theme === theme),
-                    "claude",
-                    resolveThemeLabel,
-                  );
-                }}
-              />
-            </span>
-            <label style={{ ...btn.ai(C.navy), display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              Arrange by
-              <select
-                value={arrangeBy}
-                onChange={(e) => applyArrange(e.target.value as ArrangeByKey)}
+
+          <div style={{ display: "flex", alignItems: "center", width: "100%", flexWrap: "wrap", gap: 8 }}>
+            <div style={TOOLBAR_CLUSTER}>
+              <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
+              <QuestionsNavLink style={{ textDecoration: "none" }} />
+              <AskButton />
+            </div>
+
+            <ToolbarDivider />
+
+            <ToolbarAiMenu
+              anyBusy={busy.links || busy.ideas}
+              items={[
+                {
+                  label: "Map linkages with AI",
+                  busyLabel: "Mapping…",
+                  busy: busy.links,
+                  disabled: busy.links,
+                  onSelect: mapLinks,
+                  info: {
+                    title: "Map linkages with AI",
+                    description: "Analyses the cards on the board and draws links between related items. Returns pairs as JSON and adds them to the canvas.",
+                    prompt: () => buildLinkagesPrompt(cards),
+                  },
+                },
+                {
+                  label: "Suggest use case",
+                  busyLabel: "Thinking…",
+                  busy: busy.ideas,
+                  disabled: busy.ideas,
+                  onSelect: suggestIdeas,
+                  info: {
+                    title: "Suggest use case",
+                    description: "Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board.",
+                    prompt: () => {
+                      const challengesBoard = getChallengesBoard(boards);
+                      const aiBoard = findAiUseCasesBoard(boards);
+                      const suggested = aiBoard?.cards ?? [];
+                      const categoryName = resolveThemeLabel(theme);
+                      return buildSingleSuggestPrompt(
+                        challengesBoard?.cards ?? [],
+                        suggested,
+                        categoryName,
+                        suggested.filter((c) => c.theme === theme),
+                        "claude",
+                        resolveThemeLabel,
+                      );
+                    },
+                  },
+                },
+              ]}
+            />
+
+            <ToolbarDivider />
+
+            <div style={{ ...TOOLBAR_CLUSTER, flex: "1 1 auto", minWidth: 0, flexWrap: "wrap" }}>
+              <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                Arrange by
+                <select
+                  value={arrangeBy}
+                  onChange={(e) => applyArrange(e.target.value as ArrangeByKey)}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: C.navy,
+                    fontWeight: 700,
+                    fontSize: 13,
+                    fontFamily: "inherit",
+                    cursor: "pointer",
+                    outline: "none",
+                  }}
+                >
+                  {ARRANGE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                </select>
+              </label>
+              <button
+                type="button"
                 style={{
-                  border: "none",
-                  background: "transparent",
-                  color: C.navy,
-                  fontWeight: 700,
-                  fontSize: 13,
-                  fontFamily: "inherit",
-                  cursor: "pointer",
-                  outline: "none",
+                  ...btn.ghost,
+                  ...(showLinkages ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}),
+                }}
+                aria-pressed={showLinkages}
+                onClick={() => {
+                  setShowLinkages(!showLinkages);
+                  if (showLinkages) setSelectedLinkId(null);
                 }}
               >
-                {ARRANGE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </label>
-            {arrangeBy === "category" && (
-              <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", ...(duplicateAcrossCategories ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}) }}>
-                <input
-                  type="checkbox"
-                  checked={duplicateAcrossCategories}
-                  onChange={(e) => setDuplicateAcrossCategories(e.target.checked)}
-                  style={{ accentColor: C.navy, cursor: "pointer" }}
-                />
-                Duplicate across categories
-              </label>
-            )}
-            <button
-              type="button"
-              style={{
-                ...btn.ghost,
-                ...(showLinkages ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}),
-              }}
-              aria-pressed={showLinkages}
-              onClick={() => {
-                setShowLinkages(!showLinkages);
-                if (showLinkages) setSelectedLinkId(null);
-              }}
-            >
-              {showLinkages ? "Linkages on" : "Linkages off"}
-            </button>
-            <button style={btn.primarySm} onClick={() => setShowPack(true)}>Takeaway pack</button>
+                {showLinkages ? "Linkages on" : "Linkages off"}
+              </button>
+              {arrangeBy === "category" && (
+                <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", ...(duplicateAcrossCategories ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}) }}>
+                  <input
+                    type="checkbox"
+                    checked={duplicateAcrossCategories}
+                    onChange={(e) => setDuplicateAcrossCategories(e.target.checked)}
+                    style={{ accentColor: C.navy, cursor: "pointer" }}
+                  />
+                  Duplicate across categories
+                </label>
+              )}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexShrink: 0 }}>
+              <ToolbarExportMenu items={exportMenuItems} />
+              <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={() => setShowPack(true)}>Takeaway pack</button>
+            </div>
           </div>
+
           <button
             type="button"
             data-panel-ui
@@ -4146,6 +4989,11 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                 removeCard={removeCard}
                 themeOf={resolveTheme}
                 getCardAccent={getCardAccent}
+                themes={themes}
+                onCardCategoriesChange={() => {}}
+                onCreateCategory={createCategory}
+                onDeleteCategory={deleteCategory}
+                onToggleControls={() => {}}
               />
             ))}
             {cards.map((c) => (
@@ -4167,6 +5015,11 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                 removeCard={removeCard}
                 themeOf={resolveTheme}
                 getCardAccent={getCardAccent}
+                themes={themes}
+                onCardCategoriesChange={cardCategoriesChange}
+                onCreateCategory={createCategory}
+                onDeleteCategory={deleteCategory}
+                onToggleControls={toggleCardControls}
               />
             ))}
           </div>
@@ -4227,6 +5080,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                     value={theme}
                     onChange={setTheme}
                     onCreateCategory={createCategory}
+                    onDeleteCategory={deleteCategory}
                   />
                   <input
                     style={{ flex: "1 1 120px", minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, outline: "none" }}
@@ -4300,24 +5154,52 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               onClick={() => togglePanel("right")}
               style={{ ...panelTab, position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)", width: PANEL_TAB, height: 40, borderRadius: 6, zIndex: 2 }}
             >›</button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingLeft: PANEL_TAB + 4 }}>
-              <span style={{ fontWeight: 700, color: C.navy, fontFamily: display }}>AI insight</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: C.navy, fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: busy.review ? C.yellow : C.mint }}>{busy.review ? "reviewing…" : "live"}</span>
-                <InfoButton
-                  align="right"
-                  title="Refresh review"
-                  description="Watches the cards on the board and generates three live insights — the strongest pattern, the biggest AI opportunity, and one gap to probe. Uses the model selected in the header."
-                  prompt={() => buildReviewPrompt(cards, resolveThemeLabel)}
-                />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, paddingLeft: PANEL_TAB + 4 }}>
+              <div>
+                <div style={{ fontWeight: 700, color: C.navy, fontFamily: display, fontSize: 15 }}>AI review</div>
+                <div style={{ fontSize: 11, color: "#7A8499", marginTop: 2 }}>Single model: {providerLabel(DEFAULT_AI_PROVIDER)}</div>
               </div>
+              <span style={{ color: C.navy, fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: busy.review ? C.yellow : C.mint, flexShrink: 0 }}>{busy.review ? "reviewing…" : "live"}</span>
             </div>
             <div style={{ marginTop: 14, flex: 1, overflow: "auto" }}>
               {insight ? insight.split("\n").filter(Boolean).map((line, k) => (
                 <p key={k} style={{ fontSize: 14, lineHeight: 1.5, color: C.navy, margin: "0 0 10px", paddingLeft: 10, borderLeft: `2px solid ${C.mint}` }}>{line}</p>
               )) : <p style={{ color: "#7A8499", fontSize: 13 }}>Insights appear here as the room fills the board.</p>}
             </div>
-            <button style={{ ...btn.ghost, marginTop: 12 }} onClick={runReview} disabled={busy.review}>Refresh review</button>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <button
+                  type="button"
+                  style={btn.ghost}
+                  onClick={runReview}
+                  disabled={busy.review || !cards.length}
+                >
+                  {busy.review ? "Refreshing…" : "Refresh"}
+                </button>
+                <InfoButton
+                  align="right"
+                  title="Refresh review"
+                  description="Watches the cards on the board and generates three live insights — the strongest pattern, the biggest AI opportunity, and one gap to probe. Uses the model selected above."
+                  prompt={() => buildReviewPrompt(cards, resolveThemeLabel)}
+                />
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <button
+                  type="button"
+                  style={btn.ghost}
+                  onClick={compareModels}
+                  disabled={busy.compare || !cards.length}
+                >
+                  {busy.compare ? "Comparing…" : "Compare all 3"}
+                </button>
+                <InfoButton
+                  align="right"
+                  title="Compare all 3"
+                  description="Sends the same prompt to Claude, Gemini, and GPT in parallel and shows the three answers side by side for comparison."
+                  prompt={() => buildComparePrompt(cards, resolveThemeLabel)}
+                />
+              </span>
+            </div>
             <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 8 }}>
               {themes.map((t) => <span key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#3A4358" }}><span style={{ width: 10, height: 10, borderRadius: 2, background: t.color }} /> {t.label}</span>)}
             </div>
@@ -4347,6 +5229,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
           onDraftChange={updateComposerDraft}
           onCategoriesChange={composerCategoriesChange}
           onCreateCategory={createCategory}
+          onDeleteCategory={deleteCategory}
           onAddDataPoint={addDataPoint}
           onAddImpact={addImpact}
           onDone={composerDone}
