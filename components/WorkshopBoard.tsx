@@ -2895,6 +2895,25 @@ const TOOLBAR_CLUSTER: React.CSSProperties = {
   flexShrink: 0,
 };
 
+const TOOLBAR_CLUSTER_LABEL: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  color: "#9AA3B2",
+  textTransform: "uppercase",
+  flexShrink: 0,
+  userSelect: "none",
+};
+
+function ToolbarCluster({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+      <span style={TOOLBAR_CLUSTER_LABEL}>{label}</span>
+      <div style={TOOLBAR_CLUSTER}>{children}</div>
+    </div>
+  );
+}
+
 function ToolbarDropdownLabel({ prefix, children }: { prefix: string; children: React.ReactNode }) {
   return (
     <label style={{ ...TOOLBAR_BTN, cursor: "pointer" }}>
@@ -2926,7 +2945,7 @@ const TOOLBAR_BTN_TOGGLE_ON: React.CSSProperties = {
   fontWeight: 700,
 };
 
-function MapLinkagesControl({
+function ToolbarLinkagesMenu({
   mode,
   onModeChange,
   onRun,
@@ -2945,36 +2964,75 @@ function MapLinkagesControl({
   cardCount: number;
   cards: WorkshopCard[];
 }) {
-  const [clearOpen, setClearOpen] = useState(false);
-  const [clearPos, setClearPos] = useState<{ left: number; top: number; width: number } | null>(null);
-  const clearRef = useRef<HTMLButtonElement>(null);
-  const clearMenuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const modeMeta = LINKAGE_MODES.find((m) => m.id === mode) ?? LINKAGE_MODES[0];
 
-  const closeClear = useCallback(() => {
-    setClearOpen(false);
-    setClearPos(null);
+  const measurePos = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const menu = menuRef.current;
+    const r = trigger.getBoundingClientRect();
+    const width = Math.max(r.width, 260);
+    const gap = 6;
+    const menuH = menu?.offsetHeight ?? 200;
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
+    let top = r.bottom + gap;
+    if (top + menuH > window.innerHeight - 8) {
+      top = Math.max(8, r.top - menuH - gap);
+    }
+    return { left, top, width };
   }, []);
 
-  const openClear = useCallback(() => {
-    const trigger = clearRef.current;
+  const close = useCallback(() => {
+    setOpen(false);
+    setPos(null);
+  }, []);
+
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
     if (!trigger) return;
     const r = trigger.getBoundingClientRect();
-    setClearPos({
-      left: Math.max(12, Math.min(r.left, window.innerWidth - 200)),
+    const width = Math.max(r.width, 260);
+    setPos({
+      left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
       top: r.bottom + 6,
-      width: 196,
+      width,
     });
-    setClearOpen(true);
+    setOpen(true);
   }, []);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    const next = measurePos();
+    if (next) setPos(next);
+  }, [open, mode, measurePos]);
+
   useEffect(() => {
-    if (!clearOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeClear(); };
+    if (!open) return;
+    const onReflow = () => {
+      const next = measurePos();
+      if (next) setPos(next);
+    };
+    window.addEventListener("resize", onReflow);
+    window.addEventListener("scroll", onReflow, true);
+    return () => {
+      window.removeEventListener("resize", onReflow);
+      window.removeEventListener("scroll", onReflow, true);
+    };
+  }, [open, measurePos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (clearRef.current?.contains(t) || clearMenuRef.current?.contains(t)) return;
-      closeClear();
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close();
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDoc);
@@ -2982,18 +3040,32 @@ function MapLinkagesControl({
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onDoc);
     };
-  }, [clearOpen, closeClear]);
+  }, [open, close]);
 
-  const clearMenu = clearOpen && clearPos ? (
+  const panelBtn: React.CSSProperties = {
+    display: "block",
+    width: "100%",
+    border: "none",
+    background: "transparent",
+    color: C.navy,
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "9px 14px",
+    cursor: "pointer",
+    textAlign: "left",
+    fontFamily: "inherit",
+  };
+
+  const menu = open && pos ? (
     <div
-      ref={clearMenuRef}
+      ref={menuRef}
       role="menu"
-      aria-label="Clear AI linkages"
+      aria-label="Linkages"
       style={{
         position: "fixed",
-        left: clearPos.left,
-        top: clearPos.top,
-        width: clearPos.width,
+        left: pos.left,
+        top: pos.top,
+        width: pos.width,
         zIndex: CATEGORY_POPOVER_Z,
         background: C.white,
         border: `1px solid ${C.border}`,
@@ -3003,20 +3075,63 @@ function MapLinkagesControl({
         padding: "4px 0",
       }}
       onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
     >
+      <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}` }}>
+        <label style={{ ...TOOLBAR_BTN, width: "100%", boxSizing: "border-box", cursor: "pointer" }}>
+          <span style={TOOLBAR_PREFIX}>Mode</span>
+          <select
+            value={mode}
+            onChange={(e) => onModeChange(e.target.value as LinkageMode)}
+            style={{ ...TOOLBAR_SELECT, flex: 1, maxWidth: "none" }}
+          >
+            {LINKAGE_MODES.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px 4px 0" }}>
+        <button
+          type="button"
+          role="menuitem"
+          style={{
+            ...panelBtn,
+            flex: 1,
+            opacity: busy || cardCount < 2 ? 0.55 : 1,
+            cursor: busy || cardCount < 2 ? "not-allowed" : "pointer",
+          }}
+          disabled={busy || cardCount < 2}
+          onClick={() => {
+            if (busy || cardCount < 2) return;
+            onRun();
+            close();
+          }}
+        >
+          {busy ? "Mapping…" : "Map linkages"}
+        </button>
+        <span onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+          <InfoButton
+            align="right"
+            title="Map linkages with AI"
+            description={`Runs AI linkage discovery in ${modeMeta.label} mode. ${modeMeta.directional ? "Directional arrows show from→to." : "Undirected relatedness between cards."} Re-running replaces only links of the same mode; manual links are never removed.`}
+            prompt={() => buildLinkagesPrompt(cards, mode)}
+          />
+        </span>
+      </div>
       <button
         type="button"
         role="menuitem"
-        style={{ display: "block", width: "100%", border: "none", background: "transparent", color: C.navy, fontSize: 13, fontWeight: 600, padding: "9px 14px", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
-        onClick={() => { onClearMode(); closeClear(); }}
+        style={panelBtn}
+        onClick={() => { onClearMode(); close(); }}
       >
         Clear {modeMeta.label.toLowerCase()} links
       </button>
       <button
         type="button"
         role="menuitem"
-        style={{ display: "block", width: "100%", border: "none", background: "transparent", color: C.navy, fontSize: 13, fontWeight: 600, padding: "9px 14px", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
-        onClick={() => { onClearAllAi(); closeClear(); }}
+        style={panelBtn}
+        onClick={() => { onClearAllAi(); close(); }}
       >
         Clear all AI links
       </button>
@@ -3024,50 +3139,23 @@ function MapLinkagesControl({
   ) : null;
 
   return (
-  <div style={TOOLBAR_CLUSTER}>
-    <ToolbarDropdownLabel prefix="Mode">
-      <select
-        value={mode}
-        onChange={(e) => onModeChange(e.target.value as LinkageMode)}
-        style={{ ...TOOLBAR_SELECT, maxWidth: 130 }}
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          ...TOOLBAR_BTN,
+          ...(open || busy ? TOOLBAR_BTN_TOGGLE_ON : {}),
+        }}
+        onClick={() => (open ? close() : openMenu())}
       >
-        {LINKAGE_MODES.map((m) => (
-          <option key={m.id} value={m.id}>{m.label}</option>
-        ))}
-      </select>
-    </ToolbarDropdownLabel>
-    <button
-      type="button"
-      style={{
-        ...TOOLBAR_BTN,
-        ...(busy ? TOOLBAR_BTN_TOGGLE_ON : {}),
-        opacity: busy || cardCount < 2 ? 0.55 : 1,
-      }}
-      disabled={busy || cardCount < 2}
-      onClick={onRun}
-    >
-      {busy ? "Mapping…" : "Map linkages"}
-    </button>
-    <button
-      ref={clearRef}
-      type="button"
-      style={{
-        ...TOOLBAR_BTN,
-        ...(clearOpen ? TOOLBAR_BTN_TOGGLE_ON : {}),
-      }}
-      aria-haspopup="menu"
-      aria-expanded={clearOpen}
-      onClick={() => (clearOpen ? closeClear() : openClear())}
-    >
-      Clear ▾
-    </button>
-    <InfoButton
-      title="Map linkages with AI"
-      description={`Runs AI linkage discovery in ${modeMeta.label} mode. ${modeMeta.directional ? "Directional arrows show from→to." : "Undirected relatedness between cards."} Re-running replaces only links of the same mode; manual links are never removed.`}
-      prompt={() => buildLinkagesPrompt(cards, mode)}
-    />
-    {typeof document !== "undefined" && clearMenu ? createPortal(clearMenu, document.body) : null}
-  </div>
+        Linkages
+        <span style={{ color: "#9AA3B2", fontSize: 10 }} aria-hidden>▾</span>
+      </button>
+      {typeof document !== "undefined" && menu ? createPortal(menu, document.body) : null}
+    </>
   );
 }
 
@@ -5147,9 +5235,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         >▾</button>
       )}
 
-      <div className="board-panel-transition" style={{ flexShrink: 0, overflow: "hidden", maxHeight: collapsed.top ? 0 : 168 }}>
+      <div className="board-panel-transition" style={{ flexShrink: 0, overflow: "hidden", maxHeight: collapsed.top ? 0 : 200 }}>
         <header style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 20px 14px", background: C.white, borderBottom: `1px solid ${C.border}`, position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "nowrap", paddingRight: 40 }}>
+          <div style={{ display: "flex", alignItems: "center", width: "100%", flexWrap: "nowrap", paddingRight: 40, gap: 16 }}>
             <button type="button" style={btn.ghost} onClick={onBack}>← Deck</button>
             <button
               type="button"
@@ -5165,67 +5253,15 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               title="Workshop board"
               description="Capture pains and ideas on a themed whiteboard. Drag cards, draw links between them, and edit inline. Your board autosaves to Supabase every few seconds, with localStorage as an offline fallback."
             />
+            <div style={{ ...TOOLBAR_CLUSTER, marginLeft: "auto" }}>
+              <ToolbarExportMenu items={exportMenuItems} />
+              <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={() => setShowPack(true)}>Takeaway pack</button>
+            </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", width: "100%", flexWrap: "wrap", rowGap: 8 }}>
-            <div style={TOOLBAR_CLUSTER}>
-              <Link href="/tooling" style={{ ...TOOLBAR_BTN, textDecoration: "none" }}>Tooling map</Link>
-              <QuestionsNavLink style={{ textDecoration: "none" }} />
-              <AskButton />
-            </div>
-
-            <ToolbarDivider />
-
-            <MapLinkagesControl
-              mode={linkageMode}
-              onModeChange={setLinkageMode}
-              onRun={() => void mapLinks(linkageMode)}
-              onClearMode={() => clearAiLinksForMode(linkageMode)}
-              onClearAllAi={clearAllAiLinks}
-              busy={busy.links}
-              cardCount={cards.length}
-              cards={cards as WorkshopCard[]}
-            />
-
-            <ToolbarDivider />
-
-            <div style={TOOLBAR_CLUSTER}>
-              <ToolbarAiMenu
-                anyBusy={busy.ideas}
-                items={[
-                  {
-                    label: "Suggest use case",
-                    busyLabel: "Thinking…",
-                    busy: busy.ideas,
-                    disabled: busy.ideas,
-                    onSelect: suggestIdeas,
-                    info: {
-                      title: "Suggest use case",
-                      description: "Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board.",
-                      prompt: () => {
-                        const challengesBoard = getChallengesBoard(boards);
-                        const aiBoard = findAiUseCasesBoard(boards);
-                        const suggested = aiBoard?.cards ?? [];
-                        const categoryName = resolveThemeLabel(theme);
-                        return buildSingleSuggestPrompt(
-                          challengesBoard?.cards ?? [],
-                          suggested,
-                          categoryName,
-                          suggested.filter((c) => c.theme === theme),
-                          "claude",
-                          resolveThemeLabel,
-                        );
-                      },
-                    },
-                  },
-                ]}
-              />
-            </div>
-
-            <ToolbarDivider />
-
-            <div style={TOOLBAR_CLUSTER}>
-              <ToolbarDropdownLabel prefix="Arrange by">
+            <ToolbarCluster label="View">
+              <ToolbarDropdownLabel prefix="Arrange">
                 <select
                   value={arrangeBy}
                   onChange={(e) => applyArrange(e.target.value as ArrangeByKey)}
@@ -5262,16 +5298,63 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                     onChange={(e) => setDuplicateAcrossCategories(e.target.checked)}
                     style={{ accentColor: C.navy, cursor: "pointer" }}
                   />
-                  Duplicate across categories
+                  Duplicate
                 </label>
               )}
-            </div>
+            </ToolbarCluster>
 
-            <div style={{ ...TOOLBAR_CLUSTER, marginLeft: "auto" }}>
-              <ToolbarDivider />
-              <ToolbarExportMenu items={exportMenuItems} />
-              <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={() => setShowPack(true)}>Takeaway pack</button>
-            </div>
+            <ToolbarDivider />
+
+            <ToolbarCluster label="Tools">
+              <ToolbarLinkagesMenu
+                mode={linkageMode}
+                onModeChange={setLinkageMode}
+                onRun={() => void mapLinks(linkageMode)}
+                onClearMode={() => clearAiLinksForMode(linkageMode)}
+                onClearAllAi={clearAllAiLinks}
+                busy={busy.links}
+                cardCount={cards.length}
+                cards={cards as WorkshopCard[]}
+              />
+              <ToolbarAiMenu
+                anyBusy={busy.ideas}
+                items={[
+                  {
+                    label: "Suggest use case",
+                    busyLabel: "Thinking…",
+                    busy: busy.ideas,
+                    disabled: busy.ideas,
+                    onSelect: suggestIdeas,
+                    info: {
+                      title: "Suggest use case",
+                      description: "Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board.",
+                      prompt: () => {
+                        const challengesBoard = getChallengesBoard(boards);
+                        const aiBoard = findAiUseCasesBoard(boards);
+                        const suggested = aiBoard?.cards ?? [];
+                        const categoryName = resolveThemeLabel(theme);
+                        return buildSingleSuggestPrompt(
+                          challengesBoard?.cards ?? [],
+                          suggested,
+                          categoryName,
+                          suggested.filter((c) => c.theme === theme),
+                          "claude",
+                          resolveThemeLabel,
+                        );
+                      },
+                    },
+                  },
+                ]}
+              />
+              <AskButton />
+            </ToolbarCluster>
+
+            <ToolbarDivider />
+
+            <ToolbarCluster label="Pages">
+              <Link href="/tooling" style={{ ...TOOLBAR_BTN, textDecoration: "none" }}>Tooling map</Link>
+              <QuestionsNavLink style={{ textDecoration: "none" }} />
+            </ToolbarCluster>
           </div>
 
           <button
