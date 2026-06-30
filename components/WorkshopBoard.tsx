@@ -179,9 +179,10 @@ type BoardData = {
   removedThemeIds?: string[];
 };
 
-type ArrangeByKey = "category" | "dataPoint" | "impact";
+type ArrangeByKey = "none" | "category" | "dataPoint" | "impact";
 
 const ARRANGE_OPTIONS: { id: ArrangeByKey; label: string }[] = [
+  { id: "none", label: "None" },
   { id: "category", label: "Category" },
   { id: "dataPoint", label: "Data source" },
   { id: "impact", label: "Impact" },
@@ -530,6 +531,8 @@ function layoutCards(
   sortBy: ArrangeByKey,
   themes: Theme[],
 ): WorkshopCard[] {
+  if (sortBy === "none") return cards;
+
   const CARD_ROW_H = 122;
   const CARD_Y0 = 80;
 
@@ -4043,13 +4046,12 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const composerCategoriesChange = useCallback((categories: string[]) => {
     const synced = categories.slice(0, MAX_CATEGORIES);
     const theme = syncThemeFromCategories(synced);
-    const col = columnIndex(theme, themes);
-    updateComposerDraft({
-      categories: synced,
-      theme,
-      x: SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40,
-    });
-  }, [themes, updateComposerDraft]);
+    const patch: Partial<WorkshopCard> = { categories: synced, theme };
+    if (arrangeBy === "category") {
+      patch.x = SECTION_X0 + columnIndex(theme, themes) * SECTION_COL_W + 20 + Math.random() * 40;
+    }
+    updateComposerDraft(patch);
+  }, [themes, updateComposerDraft, arrangeBy]);
 
   const runComposerClassify = useCallback(async (seed: string, currentTheme: string | null) => {
     const reqId = ++composerClassifyRef.current;
@@ -4185,6 +4187,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const applyArrange = useCallback((sortBy: ArrangeByKey) => {
     setBoards((bs) => bs.map((b) => {
       if (b.id !== activeIdRef.current) return b;
+      if (sortBy === "none") {
+        return { ...b, arrangeBy: sortBy };
+      }
       return { ...b, arrangeBy: sortBy, cards: layoutCards(b.cards as WorkshopCard[], sortBy, themes) };
     }));
   }, [themes]);
@@ -4910,9 +4915,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               <DataSourceSectionColumns lanes={dataSourceLanes} />
             ) : arrangeBy === "impact" ? (
               <ImpactSectionColumns lanes={impactLanes} />
-            ) : (
+            ) : arrangeBy === "category" ? (
               <ThemeSectionColumns themes={themes} />
-            )}
+            ) : null}
             <svg style={{ position: "absolute", top: 0, left: 0, width: WORLD_W, height: WORLD_H, pointerEvents: "none", overflow: "visible", zIndex: 1 }}>
               {showLinkages && links.map((l) => {
                 const link = l as LinkData;
