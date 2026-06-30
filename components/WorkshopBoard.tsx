@@ -733,6 +733,87 @@ function computeCategoryGhosts(cards: WorkshopCard[], themes: Theme[]): Category
   return ghosts;
 }
 
+const LAYOUT_CARD_ROW_H = 122;
+const LAYOUT_CARD_Y0 = 80;
+
+function cardArrangeColumnIndex(
+  card: WorkshopCard,
+  arrangeBy: ArrangeByKey,
+  themes: Theme[],
+  pool: WorkshopCard[],
+): number {
+  if (arrangeBy === "category") {
+    return columnIndex(primaryCategory(card), themes);
+  }
+  if (arrangeBy === "dataPoint") {
+    const lanes = buildDataSourceLanes(pool);
+    const col = dataSourceLaneIndex(lanes, primaryDataSource(card));
+    return col >= 0 ? col : lanes.length;
+  }
+  if (arrangeBy === "impact") {
+    const lanes = buildImpactLanes(pool);
+    const col = impactLaneIndex(lanes, primaryImpact(card));
+    return col >= 0 ? col : lanes.length;
+  }
+  return 0;
+}
+
+function computeArrangedCardPosition(
+  card: WorkshopCard,
+  existingCards: WorkshopCard[],
+  arrangeBy: ArrangeByKey,
+  themes: Theme[],
+): { x: number; y: number } {
+  const others = existingCards.filter((c) => c.id !== card.id);
+  const pool = [...others, card];
+  const col = cardArrangeColumnIndex(card, arrangeBy, themes, pool);
+  const row = others.filter(
+    (c) => cardArrangeColumnIndex(c, arrangeBy, themes, pool) === col,
+  ).length;
+  return {
+    x: SECTION_X0 + col * SECTION_COL_W,
+    y: LAYOUT_CARD_Y0 + row * LAYOUT_CARD_ROW_H,
+  };
+}
+
+function offsetFreeformPosition(
+  base: { x: number; y: number },
+  existingCards: WorkshopCard[],
+): { x: number; y: number } {
+  const step = 24;
+  let x = base.x;
+  let y = base.y;
+  for (let i = 0; i < 16; i++) {
+    const stacked = existingCards.some(
+      (c) => Math.abs(c.x - x) < CARD_W * 0.55 && Math.abs(c.y - y) < CARD_H * 0.55,
+    );
+    if (!stacked) break;
+    x += step;
+    y += step;
+  }
+  return { x, y };
+}
+
+function computeNewCardPosition(
+  card: WorkshopCard,
+  existingCards: WorkshopCard[],
+  arrangeBy: ArrangeByKey,
+  themes: Theme[],
+  opts?: {
+    freeformPos?: { x: number; y: number };
+    viewportCenter?: { x: number; y: number };
+  },
+): { x: number; y: number } {
+  if (arrangeBy !== "none") {
+    return computeArrangedCardPosition(card, existingCards, arrangeBy, themes);
+  }
+  const base = opts?.freeformPos ?? {
+    x: (opts?.viewportCenter?.x ?? SECTION_X0 + SECTION_COL_W) - CARD_W / 2,
+    y: (opts?.viewportCenter?.y ?? LAYOUT_CARD_Y0 + CARD_H) - CARD_H / 2,
+  };
+  return offsetFreeformPosition(base, existingCards.filter((c) => c.id !== card.id));
+}
+
 function matchOption(value: string | undefined, options: string[]): string | null {
   if (!value?.trim()) return null;
   const v = value.trim().toLowerCase();
@@ -1439,6 +1520,30 @@ const sizeCapMax = (c: { size?: number }) => c.size ?? FIT_MAX;
 
 const cardDisplayW = (c: { w?: number }, editing: boolean) => (editing ? Math.max(cardW(c), EDIT_MIN_W) : cardW(c));
 const cardDisplayH = (c: { h?: number }, editing: boolean) => (editing ? Math.max(cardH(c), EDIT_MIN_H) : cardH(c));
+
+type WorldBounds = { minX: number; minY: number; maxX: number; maxY: number };
+
+function cardsWorldBounds(cards: WorkshopCard[]): WorldBounds | null {
+  if (!cards.length) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const c of cards) {
+    const w = cardDisplayW(c, false);
+    const h = cardDisplayH(c, false);
+    minX = Math.min(minX, c.x);
+    minY = Math.min(minY, c.y);
+    maxX = Math.max(maxX, c.x + w);
+    maxY = Math.max(maxY, c.y + h);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+const RECENTER_WORLD_PAD = 48;
+const RECENTER_SCREEN_PAD = 32;
+const RECENTER_BOTTOM_INSET_OPEN = 228;
+const RECENTER_BOTTOM_INSET_COLLAPSED = 76;
 
 function fitFontSize(el: HTMLElement, maxFs: number, minFs = FIT_MIN): number {
   const cap = Math.min(maxFs, FIT_MAX);
@@ -4458,25 +4563,36 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const cardCategoriesChange = useCallback((id: string, categories: string[]) => {
     const synced = categories.slice(0, MAX_CATEGORIES);
     const th = syncThemeFromCategories(synced);
+    const card = cards.find((x) => x.id === id);
+    if (!card) return;
+    const next = { ...card, categories: synced, theme: th } as WorkshopCard;
     const patch: Record<string, unknown> = { categories: synced, theme: th };
-    if (arrangeBy === "category") {
-      patch.x = SECTION_X0 + columnIndex(th, themes) * SECTION_COL_W + 20 + Math.random() * 40;
+    if (arrangeBy !== "none") {
+      const pos = computeNewCardPosition(next, cards as WorkshopCard[], arrangeBy, themes);
+      patch.x = pos.x;
+      patch.y = pos.y;
     }
     updateCard(id, patch);
-  }, [updateCard, arrangeBy, themes]);
+  }, [updateCard, arrangeBy, themes, cards]);
 
   const toggleCardControls = useCallback((id: string) => {
     setControlsCardId((prev) => (prev === id ? null : id));
     setSelectedId(id);
   }, []);
 
-  const makeDraftCard = useCallback((opts: { text?: string; theme?: string | null; ai?: boolean; pos?: { x: number; y: number } }): WorkshopCard => {
+  const makeDraftCard = useCallback((opts: {
+    text?: string;
+    theme?: string | null;
+    ai?: boolean;
+    pos?: { x: number; y: number };
+    existingCards: WorkshopCard[];
+    arrangeByKey: ArrangeByKey;
+    viewportCenter?: { x: number; y: number };
+  }): WorkshopCard => {
     const categories = opts.theme ? [opts.theme] : [];
     const th = syncThemeFromCategories(categories);
     const txt = (opts.text ?? "").trim();
-    const reg = th == null ? themes.length : themes.findIndex((x) => x.id === th);
-    const col = reg < 0 ? themes.length : reg;
-    return {
+    const base: WorkshopCard = {
       id: newId(),
       title: "",
       categories,
@@ -4485,19 +4601,39 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       description: txt,
       dataPoints: [NA_DATA_POINT],
       impact: { types: [] },
-      x: opts.pos?.x ?? SECTION_X0 + col * SECTION_COL_W + Math.random() * 40,
-      y: opts.pos?.y ?? 320 + Math.random() * 140,
+      x: 0,
+      y: 0,
       ai: !!opts.ai,
       classifying: false,
     };
+    const pos = computeNewCardPosition(base, opts.existingCards, opts.arrangeByKey, themes, {
+      freeformPos: opts.arrangeByKey === "none" ? opts.pos : undefined,
+      viewportCenter: opts.viewportCenter,
+    });
+    return { ...base, ...pos };
   }, [themes]);
 
+  const viewportCenterWorld = useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return undefined;
+    const { zoom: z, panX, panY } = zoomPanRef.current;
+    return {
+      x: (rect.left + rect.width / 2 - rect.left - panX) / z,
+      y: (rect.top + rect.height / 2 - rect.top - panY) / z,
+    };
+  }, []);
+
   const openComposerCreate = useCallback((opts: { text?: string; theme?: string | null; ai?: boolean; pos?: { x: number; y: number } }) => {
-    const draft = makeDraftCard(opts);
+    const draft = makeDraftCard({
+      ...opts,
+      existingCards: cards as WorkshopCard[],
+      arrangeByKey: arrangeBy,
+      viewportCenter: viewportCenterWorld(),
+    });
     setComposer({ mode: "create", draft, aiRan: false });
     setSelectedId(null);
     setControlsCardId(null);
-  }, [makeDraftCard]);
+  }, [makeDraftCard, cards, arrangeBy, viewportCenterWorld]);
 
   const openComposerEdit = useCallback((c: WorkshopCard) => {
     setComposer({ mode: "edit", draft: { ...c }, aiRan: true });
@@ -4512,12 +4648,17 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
   const composerCategoriesChange = useCallback((categories: string[]) => {
     const synced = categories.slice(0, MAX_CATEGORIES);
     const theme = syncThemeFromCategories(synced);
-    const patch: Partial<WorkshopCard> = { categories: synced, theme };
-    if (arrangeBy === "category") {
-      patch.x = SECTION_X0 + columnIndex(theme, themes) * SECTION_COL_W + 20 + Math.random() * 40;
-    }
-    updateComposerDraft(patch);
-  }, [themes, updateComposerDraft, arrangeBy]);
+    setComposer((prev) => {
+      if (!prev) return null;
+      const nextDraft = { ...prev.draft, categories: synced, theme };
+      if (arrangeBy !== "none") {
+        const pos = computeNewCardPosition(nextDraft, cards as WorkshopCard[], arrangeBy, themes);
+        nextDraft.x = pos.x;
+        nextDraft.y = pos.y;
+      }
+      return { ...prev, draft: nextDraft };
+    });
+  }, [arrangeBy, themes, cards]);
 
   const runComposerClassify = useCallback(async (seed: string, currentTheme: string | null) => {
     const reqId = ++composerClassifyRef.current;
@@ -4533,10 +4674,13 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         if (!prev) return null;
         const nextDraft = { ...prev.draft, ...patch, classifying: false };
         if (patch.theme && prev.draft.categories.length === 0 && themes.some((t) => t.id === patch.theme)) {
-          const col = columnIndex(patch.theme, themes);
           nextDraft.categories = patch.categories ?? [patch.theme];
           nextDraft.theme = patch.theme;
-          nextDraft.x = SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40;
+        }
+        if (arrangeBy !== "none") {
+          const pos = computeNewCardPosition(nextDraft, cards as WorkshopCard[], arrangeBy, themes);
+          nextDraft.x = pos.x;
+          nextDraft.y = pos.y;
         }
         return { ...prev, draft: nextDraft };
       });
@@ -4545,7 +4689,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         setComposer((prev) => (prev ? { ...prev, draft: { ...prev.draft, classifying: false } } : null));
       }
     }
-  }, [dataPoints, impacts, themes, showAiError]);
+  }, [dataPoints, impacts, themes, showAiError, arrangeBy, cards]);
 
   useEffect(() => {
     if (!composer || composer.mode !== "create" || composer.aiRan) return;
@@ -4573,8 +4717,15 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       classifying: false,
     };
     if (composer.mode === "create") {
-      setCards((c) => [...c, final]);
-      setSelectedId(final.id);
+      const positioned = {
+        ...final,
+        ...computeNewCardPosition(final, cards as WorkshopCard[], arrangeBy, themes, {
+          freeformPos: arrangeBy === "none" ? { x: final.x, y: final.y } : undefined,
+          viewportCenter: viewportCenterWorld(),
+        }),
+      };
+      setCards((c) => [...c, positioned]);
+      setSelectedId(positioned.id);
     } else {
       updateCard(final.id, {
         title: final.title,
@@ -4590,7 +4741,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
       });
     }
     setComposer(null);
-  }, [composer, setCards, updateCard]);
+  }, [composer, setCards, updateCard, cards, arrangeBy, themes, viewportCenterWorld]);
 
   const composerCancel = useCallback(() => {
     composerClassifyRef.current += 1;
@@ -4987,6 +5138,42 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
 
   const resetView = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
 
+  const recenterView = useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      resetView();
+      return;
+    }
+
+    const bounds = cardsWorldBounds(cards as WorkshopCard[]);
+    if (!bounds) {
+      resetView();
+      return;
+    }
+
+    const bottomInset = collapsed.bottom ? RECENTER_BOTTOM_INSET_COLLAPSED : RECENTER_BOTTOM_INSET_OPEN;
+    const topInset = RECENTER_SCREEN_PAD;
+    const sideInset = RECENTER_SCREEN_PAD;
+    const viewW = Math.max(120, rect.width - sideInset * 2);
+    const viewH = Math.max(120, rect.height - topInset - bottomInset);
+    const visibleCenterX = sideInset + viewW / 2;
+    const visibleCenterY = topInset + viewH / 2;
+
+    const pad = RECENTER_WORLD_PAD;
+    const bboxW = Math.max(bounds.maxX - bounds.minX + pad * 2, CARD_W);
+    const bboxH = Math.max(bounds.maxY - bounds.minY + pad * 2, CARD_H);
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+
+    const fitZoom = Math.min(viewW / bboxW, viewH / bboxH);
+    const nextZoom = Math.min(1, Math.max(MIN_ZOOM, fitZoom));
+    setZoom(nextZoom);
+    setPan({
+      x: visibleCenterX - cx * nextZoom,
+      y: visibleCenterY - cy * nextZoom,
+    });
+  }, [cards, collapsed.bottom]);
+
   const reviewPrompt = () => buildReviewPrompt(cards, resolveThemeLabel);
 
   async function runReview() {
@@ -5157,8 +5344,7 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
     const candidate = suggestCandidates[selectedSuggestProvider];
     if (!candidate?.text || candidate.error) return;
 
-    const col = columnIndex(suggestCategory, themes);
-    const card: WorkshopCard = {
+    const draft: WorkshopCard = {
       id: newId(),
       title: candidate.text.split(/\s+/).slice(0, 6).join(" ").replace(/[.,;:!?]+$/, "").trim() || candidate.text,
       categories: [suggestCategory],
@@ -5169,13 +5355,18 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
         : candidate.text,
       dataPoints: [NA_DATA_POINT],
       impact: { types: [] },
-      x: SECTION_X0 + col * SECTION_COL_W + 20 + Math.random() * 40,
-      y: 320 + Math.random() * 140,
+      x: 0,
+      y: 0,
       ai: true,
       classifying: false,
     };
 
     const { boards: nextBoards, boardId } = ensureAiUseCasesBoard(boardSnapshot(boards, activeId, zoom, pan));
+    const targetBoard = nextBoards.find((b) => b.id === boardId);
+    const targetArrange = normalizeArrangeBy(targetBoard?.arrangeBy) ?? "category";
+    const targetCards = (targetBoard?.cards ?? []) as WorkshopCard[];
+    const pos = computeNewCardPosition(draft, targetCards, targetArrange, themes);
+    const card: WorkshopCard = { ...draft, ...pos };
     setBoards(
       nextBoards.map((b) => (b.id === boardId ? { ...b, cards: [...b.cards, card] } : b))
     );
@@ -5270,6 +5461,14 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                   {ARRANGE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                 </select>
               </ToolbarDropdownLabel>
+              <button
+                type="button"
+                style={TOOLBAR_BTN}
+                onClick={recenterView}
+                aria-label="Recenter all cards in view"
+              >
+                Recenter
+              </button>
               <button
                 type="button"
                 style={{
