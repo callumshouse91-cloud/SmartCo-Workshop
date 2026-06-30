@@ -147,7 +147,7 @@ export const DECK: DeckSlide[] = [
         name: "Oli Kane",
         role: "Managing Director, SmartCo",
         rolePill: "Opens & sets context",
-        bio: "Two decades leading enterprise transformation — 40+ legacy systems replaced at Sir Robert McAlpine, an £11m agile programme at VolkerWessels, mission-critical platforms at Gatwick. Knows how complex change really lands.",
+        bio: "Two decades leading enterprise transformation — 40+ legacy systems replaced at Sir Robert McAlpine, an £11m agile programme at VolkerWessels, and mission-critical platforms at Gatwick.",
         photo: "/images/1713961688549.jpg",
         initials: "OK",
       },

@@ -2870,6 +2870,23 @@ const TOOLBAR_BTN: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const TOOLBAR_PREFIX: React.CSSProperties = {
+  fontSize: 12,
+  color: "#7A8499",
+  fontWeight: 600,
+};
+
+const TOOLBAR_SELECT: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: C.navy,
+  fontWeight: 700,
+  fontSize: 13,
+  fontFamily: "inherit",
+  cursor: "pointer",
+  outline: "none",
+};
+
 const TOOLBAR_CLUSTER: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -2877,6 +2894,15 @@ const TOOLBAR_CLUSTER: React.CSSProperties = {
   flexWrap: "nowrap",
   flexShrink: 0,
 };
+
+function ToolbarDropdownLabel({ prefix, children }: { prefix: string; children: React.ReactNode }) {
+  return (
+    <label style={{ ...TOOLBAR_BTN, cursor: "pointer" }}>
+      <span style={TOOLBAR_PREFIX}>{prefix}</span>
+      {children}
+    </label>
+  );
+}
 
 function ToolbarDivider() {
   return (
@@ -2887,7 +2913,7 @@ function ToolbarDivider() {
         alignSelf: "stretch",
         minHeight: 28,
         background: C.border,
-        margin: "0 10px",
+        margin: "0 14px",
         flexShrink: 0,
       }}
     />
@@ -2998,29 +3024,18 @@ function MapLinkagesControl({
   ) : null;
 
   return (
-  <div style={{ ...TOOLBAR_CLUSTER, flexWrap: "wrap" }}>
-    <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "9px 10px" }}>
-      <span style={{ fontSize: 12, color: "#7A8499", fontWeight: 600 }}>Mode</span>
+  <div style={TOOLBAR_CLUSTER}>
+    <ToolbarDropdownLabel prefix="Mode">
       <select
         value={mode}
         onChange={(e) => onModeChange(e.target.value as LinkageMode)}
-        style={{
-          border: "none",
-          background: "transparent",
-          color: C.navy,
-          fontWeight: 700,
-          fontSize: 13,
-          fontFamily: "inherit",
-          cursor: "pointer",
-          outline: "none",
-          maxWidth: 130,
-        }}
+        style={{ ...TOOLBAR_SELECT, maxWidth: 130 }}
       >
         {LINKAGE_MODES.map((m) => (
           <option key={m.id} value={m.id}>{m.label}</option>
         ))}
       </select>
-    </label>
+    </ToolbarDropdownLabel>
     <button
       type="button"
       style={{
@@ -3033,21 +3048,24 @@ function MapLinkagesControl({
     >
       {busy ? "Mapping…" : "Map linkages"}
     </button>
-    <InfoButton
-      title="Map linkages with AI"
-      description={`Runs AI linkage discovery in ${modeMeta.label} mode. ${modeMeta.directional ? "Directional arrows show from→to." : "Undirected relatedness between cards."} Re-running replaces only links of the same mode; manual links are never removed.`}
-      prompt={() => buildLinkagesPrompt(cards, mode)}
-    />
     <button
       ref={clearRef}
       type="button"
-      style={btn.ghost}
+      style={{
+        ...TOOLBAR_BTN,
+        ...(clearOpen ? TOOLBAR_BTN_TOGGLE_ON : {}),
+      }}
       aria-haspopup="menu"
       aria-expanded={clearOpen}
       onClick={() => (clearOpen ? closeClear() : openClear())}
     >
       Clear ▾
     </button>
+    <InfoButton
+      title="Map linkages with AI"
+      description={`Runs AI linkage discovery in ${modeMeta.label} mode. ${modeMeta.directional ? "Directional arrows show from→to." : "Undirected relatedness between cards."} Re-running replaces only links of the same mode; manual links are never removed.`}
+      prompt={() => buildLinkagesPrompt(cards, mode)}
+    />
     {typeof document !== "undefined" && clearMenu ? createPortal(clearMenu, document.body) : null}
   </div>
   );
@@ -5149,9 +5167,9 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
             />
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", width: "100%", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", width: "100%", flexWrap: "wrap", rowGap: 8 }}>
             <div style={TOOLBAR_CLUSTER}>
-              <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Tooling map</Link>
+              <Link href="/tooling" style={{ ...TOOLBAR_BTN, textDecoration: "none" }}>Tooling map</Link>
               <QuestionsNavLink style={{ textDecoration: "none" }} />
               <AskButton />
             </div>
@@ -5169,64 +5187,58 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               cards={cards as WorkshopCard[]}
             />
 
-            <ToolbarAiMenu
-              anyBusy={busy.ideas}
-              items={[
-                {
-                  label: "Suggest use case",
-                  busyLabel: "Thinking…",
-                  busy: busy.ideas,
-                  disabled: busy.ideas,
-                  onSelect: suggestIdeas,
-                  info: {
-                    title: "Suggest use case",
-                    description: "Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board.",
-                    prompt: () => {
-                      const challengesBoard = getChallengesBoard(boards);
-                      const aiBoard = findAiUseCasesBoard(boards);
-                      const suggested = aiBoard?.cards ?? [];
-                      const categoryName = resolveThemeLabel(theme);
-                      return buildSingleSuggestPrompt(
-                        challengesBoard?.cards ?? [],
-                        suggested,
-                        categoryName,
-                        suggested.filter((c) => c.theme === theme),
-                        "claude",
-                        resolveThemeLabel,
-                      );
+            <ToolbarDivider />
+
+            <div style={TOOLBAR_CLUSTER}>
+              <ToolbarAiMenu
+                anyBusy={busy.ideas}
+                items={[
+                  {
+                    label: "Suggest use case",
+                    busyLabel: "Thinking…",
+                    busy: busy.ideas,
+                    disabled: busy.ideas,
+                    onSelect: suggestIdeas,
+                    info: {
+                      title: "Suggest use case",
+                      description: "Asks Claude, Gemini, and GPT for task-level use cases tailored to the selected category goal. Pick one, then add it to the AI use-cases board.",
+                      prompt: () => {
+                        const challengesBoard = getChallengesBoard(boards);
+                        const aiBoard = findAiUseCasesBoard(boards);
+                        const suggested = aiBoard?.cards ?? [];
+                        const categoryName = resolveThemeLabel(theme);
+                        return buildSingleSuggestPrompt(
+                          challengesBoard?.cards ?? [],
+                          suggested,
+                          categoryName,
+                          suggested.filter((c) => c.theme === theme),
+                          "claude",
+                          resolveThemeLabel,
+                        );
+                      },
                     },
                   },
-                },
-              ]}
-            />
+                ]}
+              />
+            </div>
 
             <ToolbarDivider />
 
-            <div style={{ ...TOOLBAR_CLUSTER, flex: "1 1 auto", minWidth: 0, flexWrap: "wrap" }}>
-              <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                Arrange by
+            <div style={TOOLBAR_CLUSTER}>
+              <ToolbarDropdownLabel prefix="Arrange by">
                 <select
                   value={arrangeBy}
                   onChange={(e) => applyArrange(e.target.value as ArrangeByKey)}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: C.navy,
-                    fontWeight: 700,
-                    fontSize: 13,
-                    fontFamily: "inherit",
-                    cursor: "pointer",
-                    outline: "none",
-                  }}
+                  style={TOOLBAR_SELECT}
                 >
                   {ARRANGE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                 </select>
-              </label>
+              </ToolbarDropdownLabel>
               <button
                 type="button"
                 style={{
-                  ...btn.ghost,
-                  ...(showLinkages ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}),
+                  ...TOOLBAR_BTN,
+                  ...(showLinkages ? TOOLBAR_BTN_TOGGLE_ON : {}),
                 }}
                 aria-pressed={showLinkages}
                 onClick={() => {
@@ -5237,7 +5249,13 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
                 {showLinkages ? "Linkages on" : "Linkages off"}
               </button>
               {arrangeBy === "category" && (
-                <label style={{ ...btn.ghost, display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", ...(duplicateAcrossCategories ? { background: C.surface, borderColor: C.navy, fontWeight: 700 } : {}) }}>
+                <label
+                  style={{
+                    ...TOOLBAR_BTN,
+                    cursor: "pointer",
+                    ...(duplicateAcrossCategories ? TOOLBAR_BTN_TOGGLE_ON : {}),
+                  }}
+                >
                   <input
                     type="checkbox"
                     checked={duplicateAcrossCategories}
@@ -5249,7 +5267,8 @@ function Board({ onBack, onEndSession }: { onBack: () => void; onEndSession: () 
               )}
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexShrink: 0 }}>
+            <div style={{ ...TOOLBAR_CLUSTER, marginLeft: "auto" }}>
+              <ToolbarDivider />
               <ToolbarExportMenu items={exportMenuItems} />
               <button type="button" style={{ ...btn.primarySm, flexShrink: 0 }} onClick={() => setShowPack(true)}>Takeaway pack</button>
             </div>

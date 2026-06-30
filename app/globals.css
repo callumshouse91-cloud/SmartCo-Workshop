@@ -814,23 +814,33 @@ button:disabled { opacity: .55; cursor: default; }
   position: relative;
   z-index: 1;
 }
+.whos-in-room-slide.intro-slide-fit {
+  justify-content: flex-start;
+}
+.whos-in-room-slide .intro-slide-title {
+  margin-bottom: clamp(6px, 1vh, 12px);
+}
 .whos-in-room-slide .whos-room-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  align-items: stretch;
   gap: clamp(12px, 2vw, 22px);
   position: relative;
   z-index: 1;
-  margin-top: clamp(8px, 1.5vh, 16px);
+  margin-top: clamp(6px, 1.2vh, 12px);
+  flex-shrink: 0;
 }
 .whos-room-card {
   display: flex;
   flex-direction: column;
   align-items: center;
+  height: 100%;
   text-align: center;
   background: #ffffff;
   border: 1px solid #e0e4ec;
   border-radius: 12px;
   padding: clamp(14px, 2vh, 20px) clamp(12px, 1.5vw, 16px);
+  overflow: visible;
 }
 .whos-room-photo {
   width: clamp(88px, 11vw, 112px);
@@ -884,12 +894,14 @@ button:disabled { opacity: .55; cursor: default; }
 }
 .whos-room-bio {
   font-family: var(--font-dm-sans), system-ui, sans-serif;
-  font-size: clamp(11px, 1.25vw, 13px);
+  font-size: clamp(10px, 1.15vw, 12px);
   color: #3a4358;
   line-height: 1.6;
   margin: 0;
   text-align: left;
   width: 100%;
+  flex-shrink: 0;
+  overflow: visible;
 }
 @media (max-width: 900px) {
   .whos-in-room-slide .whos-room-grid {

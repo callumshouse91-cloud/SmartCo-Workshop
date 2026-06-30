@@ -171,13 +171,11 @@ async function callClaudePlain(system: string, content: string, temperature?: nu
 async function gptChatCompletion(
   messages: { role: string; content: string }[],
   tokenField: "max_tokens" | "max_completion_tokens",
-  temperature?: number,
 ) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return { ok: false as const, error: "gpt key not set" };
   const body: Record<string, unknown> = { model: OPENAI_MODEL, messages };
   body[tokenField] = 1000;
-  if (temperature != null) body.temperature = temperature;
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
@@ -186,7 +184,7 @@ async function gptChatCompletion(
   if (!r.ok) {
     const errBody = await r.text();
     if (tokenField === "max_tokens" && /max_completion_tokens/i.test(errBody)) {
-      return gptChatCompletion(messages, "max_completion_tokens", temperature);
+      return gptChatCompletion(messages, "max_completion_tokens");
     }
     return { ok: false as const, error: formatOpenAIError(r.status, errBody, OPENAI_MODEL) };
   }
@@ -194,11 +192,10 @@ async function gptChatCompletion(
   return { ok: true as const, text: (d.choices?.[0]?.message?.content || "").trim() };
 }
 
-async function callGptPlain(system: string, content: string, temperature?: number): Promise<AIResult> {
+async function callGptPlain(system: string, content: string): Promise<AIResult> {
   const result = await gptChatCompletion(
     [{ role: "system", content: system }, { role: "user", content }],
     "max_tokens",
-    temperature,
   );
   if (!result.ok) {
     console.error("[ai] gpt plain error:", result.error);
@@ -250,13 +247,13 @@ async function callGptSearch(system: string, content: string): Promise<AIResult>
   return ok({ text, grounded, sources });
 }
 
-async function callGpt(system: string, content: string, search: boolean, temperature?: number): Promise<AIResult> {
+async function callGpt(system: string, content: string, search: boolean): Promise<AIResult> {
   try {
-    if (!search) return ok(await callGptPlain(system, content, temperature));
+    if (!search) return ok(await callGptPlain(system, content));
     return await callGptSearch(system, content);
   } catch (e) {
     console.error("[ai] gpt error:", e);
-    const fallback = await callGptPlain(system, content, temperature);
+    const fallback = await callGptPlain(system, content);
     return ok({ ...fallback, grounded: false, sources: [], error: String(e) });
   }
 }
@@ -345,7 +342,7 @@ export async function POST(req: Request) {
     const p = provider as Provider;
     const temp = typeof temperature === "number" ? temperature : undefined;
     let result: AIResult;
-    if (p === "gpt") result = await callGpt(system, content, !!search, temp);
+    if (p === "gpt") result = await callGpt(system, content, !!search);
     else if (p === "gemini") result = await callGemini(system, content, !!search, temp);
     else result = await callClaude(system, content, !!search, temp);
     const { error, ...rest } = ok(result);
