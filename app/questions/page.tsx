@@ -6,6 +6,7 @@ import { AskButton } from "@/components/AskPanel";
 import { useLoggedQuestions } from "@/components/LoggedQuestionsProvider";
 import { QuestionsNavLink } from "@/components/QuestionsNavLink";
 import { questionsToMarkdown, type LoggedQuestion } from "@/lib/loggedQuestions";
+import { BOARD_NAV_HREF } from "@/lib/workshopNav";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
 
@@ -201,7 +202,7 @@ export default function QuestionsPage() {
           <AskButton />
           <Link href="/tooling" style={{ ...btn.ghost, textDecoration: "none" }}>Tooling map</Link>
           <QuestionsNavLink />
-          <Link href="/" style={{ ...btn.ghost, textDecoration: "none" }}>← Board</Link>
+          <Link href={BOARD_NAV_HREF} style={{ ...btn.ghost, textDecoration: "none" }}>← Board</Link>
         </div>
       </header>
 

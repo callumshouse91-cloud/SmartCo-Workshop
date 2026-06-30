@@ -7,6 +7,7 @@ import { QuestionsNavLink } from "@/components/QuestionsNavLink";
 import { useRegisterAskContext } from "@/components/AskContext";
 import { InfoButton } from "@/components/InfoButton";
 import { buildToolingResearchPrompt } from "@/lib/prompts";
+import { BOARD_NAV_HREF } from "@/lib/workshopNav";
 
 const display = "var(--font-outfit), system-ui, sans-serif";
 const SESSION_ID = "tooling-landscape";
@@ -464,7 +465,7 @@ export default function ToolingPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <AskButton />
           <QuestionsNavLink />
-          <Link href="/" style={{ color: C.navy, textDecoration: "none", border: `1px solid ${C.border}`, padding: "9px 16px", borderRadius: 8, fontWeight: 600, fontSize: 13, background: C.white }}>← Board</Link>
+          <Link href={BOARD_NAV_HREF} style={{ color: C.navy, textDecoration: "none", border: `1px solid ${C.border}`, padding: "9px 16px", borderRadius: 8, fontWeight: 600, fontSize: 13, background: C.white }}>← Board</Link>
         </div>
       </header>
 

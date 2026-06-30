@@ -16,6 +16,11 @@ import {
 } from "@/lib/prompts";
 import { DECK, getClosingDeck, getWorkingDeck, isImageSlide } from "./deck";
 import { renderDeckSlide } from "./IntroSlides";
+import {
+  clearIntroDismissed,
+  markIntroDismissed,
+  shouldRestoreBoardView,
+} from "@/lib/workshopNav";
 
 const CARD_W = 216;
 const CARD_H = 104;
@@ -2154,12 +2159,30 @@ export default function WorkshopBoard() {
   const [deckPhase, setDeckPhase] = useState<"working" | "closing">("working");
   const [slideIndex, setSlideIndex] = useState(0);
 
+  useEffect(() => {
+    if (!shouldRestoreBoardView()) return;
+    setMode("board");
+    markIntroDismissed();
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("view")) {
+        url.searchParams.delete("view");
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        window.history.replaceState({}, "", next || "/");
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const handleEnterBoard = () => {
+    markIntroDismissed();
     setSlideIndex(WORKING_DECK.length - 1);
     setMode("board");
   };
 
   const handleBackToDeck = () => {
+    clearIntroDismissed();
     setDeckPhase("working");
     setSlideIndex(WORKING_DECK.length - 1);
     setMode("intro");
@@ -2179,6 +2202,7 @@ export default function WorkshopBoard() {
   };
 
   const handleBackToBoardFromClosing = () => {
+    markIntroDismissed();
     setMode("board");
   };
 
